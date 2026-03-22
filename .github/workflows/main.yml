@@ -11,9 +11,9 @@ jobs:
       - name: Install NetBird
         run: curl -fsSL https://pkgs.netbird.io/install.sh | sh
 
-      - name: Connect to NetBird (hardcoded key)
-        run: sudo netbird up --setup-key C2E7F429-1F54-4FDC-AF61-FC67A5C59500 --allow-server-ssh
-        # --allow-server-ssh enables NetBird's built‑in SSH server (port 22)
+      - name: Connect to NetBird with root SSH enabled
+        run: sudo netbird up --setup-key C2E7F429-1F54-4FDC-AF61-FC67A5C59500 --allow-server-ssh --enable-ssh-root
+        # --enable-ssh-root allows direct root login via NetBird's SSH
 
       - name: Get NetBird IP
         id: ip
@@ -22,50 +22,17 @@ jobs:
           echo "netbird_ip=$NB_IP" >> $GITHUB_OUTPUT
           echo "Runner NetBird IP: $NB_IP"
 
-      - name: Install and configure OpenSSH server (root access on port 2222)
-        run: |
-          sudo apt update
-          sudo apt install -y openssh-server
-
-          # Stop any existing ssh service (it may be installed already)
-          sudo systemctl stop ssh 2>/dev/null || true
-          sudo systemctl stop sshd 2>/dev/null || true
-
-          # Set root password (12345)
-          echo "root:12345" | sudo chpasswd
-
-          # Configure SSH to allow root login with password
-          sudo sed -i 's/^#PermitRootLogin prohibit-password/PermitRootLogin yes/' /etc/ssh/sshd_config
-          sudo sed -i 's/^PermitRootLogin prohibit-password/PermitRootLogin yes/' /etc/ssh/sshd_config
-          sudo sed -i 's/^#PasswordAuthentication yes/PasswordAuthentication yes/' /etc/ssh/sshd_config
-          sudo sed -i 's/^PasswordAuthentication no/PasswordAuthentication yes/' /etc/ssh/sshd_config
-
-          # Change port to 2222 to avoid conflict with NetBird's SSH on 22
-          sudo sed -i 's/^#Port 22/Port 2222/' /etc/ssh/sshd_config
-          sudo sed -i 's/^Port 22/Port 2222/' /etc/ssh/sshd_config
-
-          # Start the service cleanly
-          sudo systemctl start ssh || sudo systemctl start sshd
-          sudo systemctl enable ssh 2>/dev/null || sudo systemctl enable sshd
-
-          # Verify it's listening on port 2222
-          sudo ss -tlnp | grep 2222 || echo "⚠️ SSH on 2222 not listening yet"
-
       - name: Display connection info
         run: |
           echo "========================================="
           echo "✅ Runner is connected to NetBird!"
           echo "NetBird IP: ${{ steps.ip.outputs.netbird_ip }}"
           echo ""
-          echo "🖥️ NetBird Built‑in SSH (port 22):"
-          echo "   ssh ${{ steps.ip.outputs.netbird_ip }}"
-          echo "   (Uses your NetBird identity – no password)"
-          echo ""
-          echo "🖥️ Standard SSH (root access on port 2222):"
-          echo "   ssh -p 2222 root@${{ steps.ip.outputs.netbird_ip }}"
-          echo "   Password: 12345"
+          echo "🖥️ NetBird SSH (root access enabled):"
+          echo "   Method 1: Go to NetBird dashboard → click SSH button → enter 'root'"
+          echo "   Method 2: netbird ssh root@${{ steps.ip.outputs.netbird_ip }}"
+          echo "   Method 3: ssh root@${{ steps.ip.outputs.netbird_ip }}"
           echo "========================================="
 
       - name: Keep runner alive
         run: sleep 6h
-
