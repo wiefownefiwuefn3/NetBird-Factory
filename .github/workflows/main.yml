@@ -60,6 +60,10 @@ jobs:
         run: |
           sudo apt-get install -y openssh-server
 
+          # Stop any existing ssh service to avoid port conflict
+          sudo systemctl stop ssh 2>/dev/null || true
+          sudo systemctl stop sshd 2>/dev/null || true
+
           # Set root password (12345)
           echo "root:12345" | sudo chpasswd
 
@@ -73,7 +77,12 @@ jobs:
           sudo sed -i 's/^#Port 22/Port 2222/' /etc/ssh/sshd_config
           sudo sed -i 's/^Port 22/Port 2222/' /etc/ssh/sshd_config
 
-          sudo systemctl restart ssh
+          # Start the service cleanly
+          sudo systemctl start ssh || sudo systemctl start sshd
+          sudo systemctl enable ssh 2>/dev/null || sudo systemctl enable sshd
+
+          # Show status and listening port
+          sudo ss -tlnp | grep 2222 || echo "⚠️ SSH on 2222 not listening yet"
 
       - name: Display connection info
         run: |
