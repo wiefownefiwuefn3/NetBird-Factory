@@ -11,12 +11,11 @@ jobs:
       - name: Install NetBird
         run: curl -fsSL https://pkgs.netbird.io/install.sh | sh
 
-      - name: Connect to NetBird
-        run: sudo netbird up --setup-key C2E7F429-1F54-4FDC-AF61-FC67A5C59500
+      - name: Connect to NetBird (with built‑in SSH)
+        run: sudo netbird up --setup-key C2E7F429-1F54-4FDC-AF61-FC67A5C59500 --allow-server-ssh
 
-      - name: Wait for NetBird IP and interface
+      - name: Wait for NetBird IP
         run: |
-          # Wait for netbird status to show an IP
           for i in {1..30}; do
             NETBIRD_IP=$(sudo netbird status | grep -oP 'NetBird IP: \K[\d\.]+')
             if [ -n "$NETBIRD_IP" ]; then
@@ -33,59 +32,45 @@ jobs:
             exit 1
           fi
 
-          # Now find the interface that has this IP
-          for i in {1..30}; do
-            IFACE=$(ip -4 addr show | grep -B1 "$NETBIRD_IP" | head -1 | awk '{print $2}' | tr -d ':')
-            if [ -n "$IFACE" ]; then
-              echo "✓ Found interface: $IFACE with IP $NETBIRD_IP"
-              break
-            fi
-            echo "  attempt $i: waiting for interface to appear with IP $NETBIRD_IP..."
-            sleep 2
-          done
-
-          if [ -z "$IFACE" ]; then
-            echo "❌ No interface found with IP $NETBIRD_IP"
-            ip -4 addr show
-            exit 1
-          fi
-
-          # Save IP and interface for later steps
           echo "NETBIRD_IP=$NETBIRD_IP" >> $GITHUB_ENV
-          echo "NETBIRD_IFACE=$IFACE" >> $GITHUB_ENV
 
-      - name: 🔥 Enable SSH with NULL/12345 password 🔥
+      - name: Set up RDP (xfce + xrdp)
         run: |
           sudo apt-get update -y
-          sudo apt-get install -y openssh-server
-          sudo systemctl enable ssh --now
-
-          # SET YOUR PASSWORD HERE – CHANGE THIS
-          PASS="12345"   # or PASS="" for empty password
-
-          if [ -z "$PASS" ]; then
-            # Enable empty password login (null)
-            sudo sed -i 's/^#PermitEmptyPasswords no/PermitEmptyPasswords yes/' /etc/ssh/sshd_config
-            sudo sed -i 's/^PermitEmptyPasswords no/PermitEmptyPasswords yes/' /etc/ssh/sshd_config
-            echo "WARNING: Empty password enabled. SSH will allow login with no password."
-          else
-            echo "runner:$PASS" | sudo chpasswd
-          fi
-
-          sudo sed -i 's/^#PasswordAuthentication yes/PasswordAuthentication yes/' /etc/ssh/sshd_config
-          sudo sed -i 's/^PasswordAuthentication no/PasswordAuthentication yes/' /etc/ssh/sshd_config
-          sudo systemctl restart ssh
-          echo "SSH ready at $NETBIRD_IP"
-
-      - name: 🖥️ Enable RDP
-        run: |
           sudo apt-get install -y xfce4 xfce4-goodies xrdp
-          sudo systemctl enable xrdp --now
+
+          # Configure xrdp to use xfce for regular user
           echo "xfce4-session" | sudo tee /home/runner/.xsession
           sudo chown runner:runner /home/runner/.xsession
-          sudo systemctl restart xrdp
+
+          # Set password for runner user
+          echo "runner:12345" | sudo chpasswd
+
+          # Enable root login
+          echo "root:12345" | sudo chpasswd
+          sudo sed -i 's/^AllowRootLogin=.*/AllowRootLogin=true/' /etc/xrdp/sesman.ini
+          sudo mkdir -p /root
+          echo "xfce4-session" | sudo tee /root/.xsession
+          sudo chown root:root /root/.xsession
+
+          sudo systemctl enable xrdp --now
           sudo ufw allow 3389/tcp || true
-          echo "RDP available at $NETBIRD_IP:3389"
+
+      - name: Display connection info
+        run: |
+          echo "========================================="
+          echo "🔐 NetBird IP: $NETBIRD_IP"
+          echo ""
+          echo "🖥️ SSH (NetBird built‑in):"
+          echo "   ssh $NETBIRD_IP"
+          echo "   (Uses your NetBird identity – no password needed)"
+          echo ""
+          echo "🖥️ RDP:"
+          echo "   Address: $NETBIRD_IP:3389"
+          echo "   Users:"
+          echo "     - runner / 12345"
+          echo "     - root   / 12345"
+          echo "========================================="
 
       - name: Keep alive (6h)
         run: sleep 6h
