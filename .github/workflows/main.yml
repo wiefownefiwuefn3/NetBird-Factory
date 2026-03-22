@@ -14,25 +14,45 @@ jobs:
       - name: Connect to NetBird
         run: sudo netbird up --setup-key C2E7F429-1F54-4FDC-AF61-FC67A5C59500
 
-      - name: Wait for NetBird interface
+      - name: Wait for NetBird IP and interface
         run: |
-          echo "Waiting for netbird0 interface..."
+          # Wait for netbird status to show an IP
           for i in {1..30}; do
-            if ip link show netbird0 &>/dev/null; then
-              echo "✓ netbird0 is up!"
+            NETBIRD_IP=$(sudo netbird status | grep -oP 'NetBird IP: \K[\d\.]+')
+            if [ -n "$NETBIRD_IP" ]; then
+              echo "✓ NetBird IP: $NETBIRD_IP"
               break
             fi
-            echo "  attempt $i: still waiting..."
+            echo "  attempt $i: still waiting for IP..."
             sleep 2
           done
-          # Double-check: if still missing, fail with error
-          if ! ip link show netbird0 &>/dev/null; then
-            echo "❌ netbird0 never appeared. Check NetBird logs:"
-            sudo netbird status || true
+
+          if [ -z "$NETBIRD_IP" ]; then
+            echo "❌ No NetBird IP found"
+            sudo netbird status
             exit 1
           fi
-          # Show IP address
-          ip addr show netbird0 | grep inet || true
+
+          # Now find the interface that has this IP
+          for i in {1..30}; do
+            IFACE=$(ip -4 addr show | grep -B1 "$NETBIRD_IP" | head -1 | awk '{print $2}' | tr -d ':')
+            if [ -n "$IFACE" ]; then
+              echo "✓ Found interface: $IFACE with IP $NETBIRD_IP"
+              break
+            fi
+            echo "  attempt $i: waiting for interface to appear with IP $NETBIRD_IP..."
+            sleep 2
+          done
+
+          if [ -z "$IFACE" ]; then
+            echo "❌ No interface found with IP $NETBIRD_IP"
+            ip -4 addr show
+            exit 1
+          fi
+
+          # Save IP and interface for later steps
+          echo "NETBIRD_IP=$NETBIRD_IP" >> $GITHUB_ENV
+          echo "NETBIRD_IFACE=$IFACE" >> $GITHUB_ENV
 
       - name: 🔥 Enable SSH with NULL/12345 password 🔥
         run: |
@@ -55,7 +75,7 @@ jobs:
           sudo sed -i 's/^#PasswordAuthentication yes/PasswordAuthentication yes/' /etc/ssh/sshd_config
           sudo sed -i 's/^PasswordAuthentication no/PasswordAuthentication yes/' /etc/ssh/sshd_config
           sudo systemctl restart ssh
-          echo "SSH ready at $(ip -4 addr show netbird0 | grep -oP '(?<=inet\s)\d+(\.\d+){3}')"
+          echo "SSH ready at $NETBIRD_IP"
 
       - name: 🖥️ Enable RDP
         run: |
@@ -65,7 +85,7 @@ jobs:
           sudo chown runner:runner /home/runner/.xsession
           sudo systemctl restart xrdp
           sudo ufw allow 3389/tcp || true
-          echo "RDP available at $(ip -4 addr show netbird0 | grep -oP '(?<=inet\s)\d+(\.\d+){3}'):3389"
+          echo "RDP available at $NETBIRD_IP:3389"
 
       - name: Keep alive (6h)
         run: sleep 6h
