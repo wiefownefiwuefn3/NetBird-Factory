@@ -14,7 +14,7 @@ RESULTS_FILE = os.path.join(DATA_DIR, 'results.json')
 WORKERS_FILE = os.path.join(DATA_DIR, 'workers.json')
 
 # Ensure files exist
-for f in[TASKS_FILE, RESULTS_FILE, WORKERS_FILE]:
+for f in [TASKS_FILE, RESULTS_FILE, WORKERS_FILE]:
     if not os.path.exists(f):
         with open(f, 'w') as fp:
             json.dump([], fp)
@@ -171,8 +171,8 @@ HTML_TEMPLATE = '''
         // Initialize Icons
         lucide.createIcons();
 
-        let history =[];
-        
+        let history = [];
+
         // UTILITY: Prevent XSS by sanitizing output before rendering
         const escapeHTML = (str) => {
             if (!str) return '';
@@ -184,12 +184,18 @@ HTML_TEMPLATE = '''
                 .replace(/'/g, "&#039;");
         };
 
-        // UTILITY: Format Timestamps
+        // UTILITY: Format Timestamps using UTC
         const timeAgo = (dateStr) => {
-            const seconds = Math.floor((new Date() - new Date(dateStr)) / 1000);
+            const now = new Date();
+            const utcNow = Date.UTC(
+                now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(),
+                now.getUTCHours(), now.getUTCMinutes(), now.getUTCSeconds()
+            );
+            const then = new Date(dateStr).getTime();
+            const seconds = Math.floor((utcNow - then) / 1000);
             if (seconds < 60) return "Just now";
-            if (seconds < 3600) return Math.floor(seconds/60) + "m ago";
-            return Math.floor(seconds/3600) + "h ago";
+            if (seconds < 3600) return Math.floor(seconds / 60) + "m ago";
+            return Math.floor(seconds / 3600) + "h ago";
         };
 
         // UTILITY: Toast Notification System
@@ -202,9 +208,7 @@ HTML_TEMPLATE = '''
             container.appendChild(toast);
             lucide.createIcons();
             
-            // Animate in
             setTimeout(() => { toast.classList.remove('translate-y-10', 'opacity-0'); }, 10);
-            // Animate out
             setTimeout(() => {
                 toast.classList.add('opacity-0');
                 setTimeout(() => toast.remove(), 300);
@@ -214,7 +218,6 @@ HTML_TEMPLATE = '''
         // CORE: Update Dashboard State
         async function updateData() {
             try {
-                // Fetch Data concurrently for speed
                 const [tasksRes, resultsRes, workersRes] = await Promise.all([
                     fetch('/api/tasks'), fetch('/api/results'), fetch('/api/workers')
                 ]);
@@ -235,7 +238,7 @@ HTML_TEMPLATE = '''
                     `).reverse().join('');
                 }
 
-                // 2. Render Results (Terminal Style)
+                // 2. Render Results
                 const resultsContainer = document.getElementById('resultsList');
                 const wasScrolledToBottom = resultsContainer.scrollHeight - resultsContainer.clientHeight <= resultsContainer.scrollTop + 10;
                 
@@ -255,7 +258,6 @@ HTML_TEMPLATE = '''
                     `}).reverse().join('');
                 }
                 
-                // Auto-scroll logic for terminal
                 if (wasScrolledToBottom) {
                     resultsContainer.scrollTop = resultsContainer.scrollHeight;
                 }
@@ -267,25 +269,9 @@ HTML_TEMPLATE = '''
                 if (workers.length === 0) {
                     workersContainer.innerHTML = '<div class="text-gray-500 italic text-sm">No nodes connected.</div>';
                 } else {
-                    const timeAgo = (dateStr) => {
-                    const now = new Date();
-                    const utcNow = Date.UTC(
-                    now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(),
-                    now.getUTCHours(), now.getUTCMinutes(), now.getUTCSeconds()
-                );
-                    const timeAgo = (dateStr) => {
-        const now = new Date();
-        const utcNow = Date.UTC(
-            now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(),
-            now.getUTCHours(), now.getUTCMinutes(), now.getUTCSeconds()
-        );
-        const then = new Date(dateStr).getTime();
-        const seconds = Math.floor((utcNow - then) / 1000);
-        if (seconds < 60) return "Just now";
-        if (seconds < 3600) return Math.floor(seconds / 60) + "m ago";
-        return Math.floor(seconds / 3600) + "h ago";
-    };
-                        
+                    workersContainer.innerHTML = workers.map(w => {
+                        const lastSeenDate = new Date(w.lastSeen);
+                        const isOnline = ((new Date().getTime() - lastSeenDate.getTime()) / 60000) < 5;
                         return `
                         <div class="bg-gray-800/40 border border-gray-700 p-3 rounded-lg flex items-center justify-between hover:bg-gray-800 transition-colors">
                             <div class="flex flex-col">
@@ -304,18 +290,17 @@ HTML_TEMPLATE = '''
                             </div>
                         </div>
                     `}).join('');
-                    lucide.createIcons(); // Re-initialize icons inside dynamically added HTML
+                    lucide.createIcons();
                 }
             } catch (err) {
                 console.error("Polling error:", err);
             }
         }
 
-        // Initialize polling safely
         setInterval(updateData, 3000);
         updateData();
 
-        // Execution Logic
+        // Command execution
         const cmdInput = document.getElementById('commandInput');
         const sendBtn = document.getElementById('sendBtn');
         const historyDiv = document.getElementById('commandHistory');
@@ -324,7 +309,6 @@ HTML_TEMPLATE = '''
             const cmd = cmdInput.value.trim();
             if (!cmd) return;
             
-            // Visual loading state
             cmdInput.disabled = true;
             sendBtn.innerHTML = `<i data-lucide="loader-2" class="w-4 h-4 animate-spin"></i> Sending`;
             lucide.createIcons();
@@ -338,8 +322,6 @@ HTML_TEMPLATE = '''
 
                 if(res.ok) {
                     showToast('Payload deployed to queue.', 'success');
-                    
-                    // History Update
                     history.unshift(cmd);
                     if (history.length > 4) history.pop();
                     historyDiv.innerHTML = history.map(c => `
@@ -355,13 +337,11 @@ HTML_TEMPLATE = '''
                 showToast('Network error.', 'error');
             }
 
-            // Restore state
             cmdInput.disabled = false;
             sendBtn.innerHTML = `Deploy <i data-lucide="send" class="w-4 h-4"></i>`;
             lucide.createIcons();
             cmdInput.focus();
-            
-            updateData(); // Immediate UI update
+            updateData();
         };
 
         sendBtn.onclick = executeCommand;
@@ -384,16 +364,20 @@ def index():
 
 @app.route('/api/tasks', methods=['GET'])
 def get_tasks():
-    with open(TASKS_FILE, 'r') as f: return jsonify(json.load(f))
+    with open(TASKS_FILE, 'r') as f:
+        return jsonify(json.load(f))
 
 @app.route('/api/tasks', methods=['POST'])
 def add_task():
     data = request.json
-    if not data or 'command' not in data: return 'Missing command', 400
+    if not data or 'command' not in data:
+        return 'Missing command', 400
     with open(TASKS_FILE, 'r+') as f:
         tasks = json.load(f)
         tasks.append({'id': len(tasks) + 1, 'command': data['command']})
-        f.seek(0); json.dump(tasks, f, indent=2); f.truncate()
+        f.seek(0)
+        json.dump(tasks, f, indent=2)
+        f.truncate()
     return 'OK', 200
 
 @app.route('/api/tasks/pop', methods=['GET'])
@@ -402,7 +386,9 @@ def pop_task():
         tasks = json.load(f)
         if tasks:
             task = tasks.pop(0)
-            f.seek(0); json.dump(tasks, f, indent=2); f.truncate()
+            f.seek(0)
+            json.dump(tasks, f, indent=2)
+            f.truncate()
             return jsonify(task)
         return '', 204
 
@@ -411,29 +397,38 @@ def add_result():
     with open(RESULTS_FILE, 'r+') as f:
         results = json.load(f)
         results.append(request.json)
-        f.seek(0); json.dump(results, f, indent=2); f.truncate()
+        f.seek(0)
+        json.dump(results, f, indent=2)
+        f.truncate()
     return 'OK', 200
 
 @app.route('/api/results', methods=['GET'])
 def get_results():
-    with open(RESULTS_FILE, 'r') as f: return jsonify(json.load(f))
+    with open(RESULTS_FILE, 'r') as f:
+        return jsonify(json.load(f))
 
 @app.route('/api/workers', methods=['POST'])
 def register_worker():
     data = request.json
-    if not data: return 'Missing data', 400
+    if not data:
+        return 'Missing data', 400
     data['lastSeen'] = datetime.utcnow().isoformat()
     with open(WORKERS_FILE, 'r+') as f:
         workers = json.load(f)
         existing = next((w for w in workers if w.get('ip') == data.get('ip')), None)
-        if existing: existing.update(data)
-        else: workers.append(data)
-        f.seek(0); json.dump(workers, f, indent=2); f.truncate()
+        if existing:
+            existing.update(data)
+        else:
+            workers.append(data)
+        f.seek(0)
+        json.dump(workers, f, indent=2)
+        f.truncate()
     return 'OK', 200
 
 @app.route('/api/workers', methods=['GET'])
 def get_workers():
-    with open(WORKERS_FILE, 'r') as f: return jsonify(json.load(f))
+    with open(WORKERS_FILE, 'r') as f:
+        return jsonify(json.load(f))
 
 if __name__ == '__main__':
     print("Dashboard started on http://127.0.0.1:5000")
