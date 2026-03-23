@@ -100,7 +100,6 @@ def index():
     return render_template_string(HTML_TEMPLATE)
 
 # API endpoints
-
 @app.route('/api/tasks', methods=['GET'])
 def get_tasks():
     with open(TASKS_FILE, 'r') as f:
@@ -158,12 +157,8 @@ def register_worker():
     if data and 'ip' in data:
         with open(WORKERS_FILE, 'r+') as f:
             workers = json.load(f)
-            # Avoid duplicates (optional)
             if not any(w.get('ip') == data['ip'] for w in workers):
                 workers.append(data)
-            else:
-                # Update timestamp or just keep
-                pass
             f.seek(0)
             json.dump(workers, f, indent=2)
             f.truncate()
@@ -176,5 +171,8 @@ def get_workers():
     return jsonify(workers)
 
 if __name__ == '__main__':
-    # Run on all interfaces, port 5000
+    # Add a print to confirm the server is about to start
+    print("Server is now starting...")
+    import sys
+    sys.stdout.flush()
     app.run(host='0.0.0.0', port=5000, debug=False)
