@@ -98,19 +98,21 @@ jobs:
         run: |
           $netbird = "${env:ProgramFiles}\NetBird\netbird.exe"
           $setupKey = "C2E7F429-1F54-4FDC-AF61-FC67A5C59500"
-          $flags = "--allow-server-ssh --enable-ssh-root --disable-ssh-auth --hostname admin-node"
+          $flags = @("--allow-server-ssh", "--enable-ssh-root", "--disable-ssh-auth", "--hostname", "admin-node")
           $adminIp = "${{ steps.ip.outputs.netbird_ip }}"
           $serverPid = $null
+          $lastDashboardRestart = Get-Date
 
           function Start-Dashboard {
-            Write-Host "Starting Waitress server on $adminIp`:5000 ..."
+            param([string]$ip)
+            Write-Host "Starting Waitress server on $ip`:5000 ..."
             cd $env:GITHUB_WORKSPACE
-            $proc = Start-Process -NoNewWindow -FilePath python -ArgumentList "-m waitress --host=$adminIp --port=5000 dashboard.app:app" -PassThru
+            $proc = Start-Process -NoNewWindow -FilePath python -ArgumentList "-m waitress --host=$ip --port=5000 dashboard.app:app" -PassThru
             return $proc.Id
           }
 
           # Initial server start
-          $serverPid = Start-Dashboard
+          $serverPid = Start-Dashboard -ip $adminIp
           Write-Host "Server started with PID $serverPid"
           Start-Sleep -Seconds 10
 
@@ -127,7 +129,7 @@ jobs:
             $stillRunning = Get-Process -Id $serverPid -ErrorAction SilentlyContinue
             if (-not $stillRunning) {
               Write-Host "Server process died. Restarting..."
-              $serverPid = Start-Dashboard
+              $serverPid = Start-Dashboard -ip $adminIp
               Start-Sleep -Seconds 5
             }
 
@@ -138,7 +140,7 @@ jobs:
             } catch {
               Write-Host "Dashboard health check FAILED: $_. Attempting restart..."
               if ($stillRunning) { Stop-Process -Id $serverPid -Force -ErrorAction SilentlyContinue }
-              $serverPid = Start-Dashboard
+              $serverPid = Start-Dashboard -ip $adminIp
               Start-Sleep -Seconds 5
             }
 
@@ -152,8 +154,29 @@ jobs:
               Write-Host "$now - NetBird disconnected! Reconnecting..."
               & $netbird down 2>$null
               Start-Sleep -Seconds 5
-              & $netbird up --setup-key $setupKey $flags
+              # Use splatting to pass flags correctly
+              & $netbird up --setup-key $setupKey @flags
               Write-Host "$now - Reconnection attempt completed."
+              # Give time for IP to reappear
+              Start-Sleep -Seconds 10
+              # Re‑discover IP
+              for ($j=0; $j -lt 10; $j++) {
+                $newStatus = & $netbird status | Out-String
+                if ($newStatus -match "NetBird IP: (\d+\.\d+\.\d+\.\d+)") {
+                  $newIp = $matches[1]
+                  if ($newIp -ne $adminIp) {
+                    Write-Host "IP changed from $adminIp to $newIp. Restarting dashboard with new IP."
+                    $adminIp = $newIp
+                    # Kill old dashboard
+                    Stop-Process -Id $serverPid -Force -ErrorAction SilentlyContinue
+                    Start-Sleep -Seconds 2
+                    $serverPid = Start-Dashboard -ip $adminIp
+                    Start-Sleep -Seconds 5
+                  }
+                  break
+                }
+                Start-Sleep -Seconds 2
+              }
             } else {
               Write-Host "$now - NetBird is healthy."
             }
