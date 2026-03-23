@@ -69,10 +69,11 @@ jobs:
           $env:WEBAPP_DATA = "C:\webapp_data"
 
           $scriptPath = Join-Path $env:GITHUB_WORKSPACE "dashboard\app.py"
-          $logFile = "C:\flask.log"
+          $stdoutLog = "C:\flask_stdout.log"
+          $stderrLog = "C:\flask_stderr.log"
           Write-Host "Starting Flask from $scriptPath ..."
           $process = Start-Process -FilePath python -ArgumentList $scriptPath `
-            -RedirectStandardOutput $logFile -RedirectStandardError $logFile `
+            -RedirectStandardOutput $stdoutLog -RedirectStandardError $stderrLog `
             -WindowStyle Hidden -PassThru
           $pid = $process.Id
           Write-Host "Flask process started with PID $pid"
@@ -82,8 +83,10 @@ jobs:
           if ($stillRunning) {
             Write-Host "Flask process is still running."
           } else {
-            Write-Host "Flask process terminated. Log content:"
-            Get-Content $logFile -ErrorAction SilentlyContinue
+            Write-Host "Flask process terminated. Stdout log:"
+            Get-Content $stdoutLog -ErrorAction SilentlyContinue
+            Write-Host "Stderr log:"
+            Get-Content $stderrLog -ErrorAction SilentlyContinue
           }
           netstat -an | findstr :5000
 
