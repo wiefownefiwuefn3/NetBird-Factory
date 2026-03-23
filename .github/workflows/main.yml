@@ -1,53 +1,90 @@
-name: NetBird SSH + RDP (No Mining)
+name: Admin Runner (External Trigger)
+
 on:
-  workflow_dispatch:
+  workflow_dispatch:   # manual trigger (and external API call)
 
 jobs:
-  netbird:
-    runs-on: ubuntu-latest
-    timeout-minutes: 360
+  admin:
+    runs-on: windows-latest
+    timeout-minutes: 360   # 6 hours max
 
     steps:
+      # 1. Install NetBird
       - name: Install NetBird
-        run: curl -fsSL https://pkgs.netbird.io/install.sh | sh
+        run: |
+          choco install netbird -y
+          if ($LASTEXITCODE -ne 0) {
+            $installerUrl = "https://github.com/netbirdio/netbird/releases/latest/download/netbird_installer.exe"
+            Invoke-WebRequest -Uri $installerUrl -OutFile "$env:TEMP\netbird_installer.exe"
+            Start-Process -FilePath "$env:TEMP\netbird_installer.exe" -ArgumentList "/S" -Wait
+          }
 
-      - name: Connect to NetBird (root SSH + RDP ready)
-        run: sudo netbird up --setup-key C2E7F429-1F54-4FDC-AF61-FC67A5C59500 --allow-server-ssh --enable-ssh-root
+      # 2. Connect to NetBird with SSH + root allowed, and set recognizable hostname
+      - name: Connect to NetBird
+        run: |
+          $netbird = "${env:ProgramFiles}\NetBird\netbird.exe"
+          & $netbird down 2>$null
+          & $netbird up --setup-key C2E7F429-1F54-4FDC-AF61-FC67A5C59500 `
+            --allow-server-ssh --enable-ssh-root `
+            --hostname admin-node
 
-      - name: Get NetBird IP
+      # 3. Wait for IP and enable RDP
+      - name: Wait for IP and enable RDP
         id: ip
         run: |
-          NB_IP=$(sudo netbird status | grep -oP 'NetBird IP: \K[^\s]+')
-          echo "netbird_ip=$NB_IP" >> $GITHUB_OUTPUT
+          $netbird = "${env:ProgramFiles}\NetBird\netbird.exe"
+          for ($i=0; $i -lt 30; $i++) {
+            $status = & $netbird status | Out-String
+            if ($status -match "NetBird IP: (\d+\.\d+\.\d+\.\d+)") {
+              $ip = $matches[1]
+              echo "netbird_ip=$ip" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+              break
+            }
+            Start-Sleep -Seconds 2
+          }
 
-      - name: Install RDP (xrdp + xfce)
-        run: |
-          sudo apt update
-          sudo apt install -y xfce4 xfce4-goodies xrdp
-          echo "xfce4-session" | sudo tee /home/runner/.xsession
-          sudo chown runner:runner /home/runner/.xsession
-          echo "root:12345" | sudo chpasswd
-          echo "runner:12345" | sudo chpasswd
-          sudo sed -i 's/^AllowRootLogin=.*/AllowRootLogin=true/' /etc/xrdp/sesman.ini
-          sudo mkdir -p /root
-          echo "xfce4-session" | sudo tee /root/.xsession
-          sudo chown root:root /root/.xsession
-          sudo systemctl enable xrdp --now
-          sudo ufw allow 3389/tcp || true
+          # Enable Remote Desktop
+          Set-ItemProperty -Path "HKLM:\System\CurrentControlSet\Control\Terminal Server" -Name "fDenyTSConnections" -Value 0
+          Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
 
+          $username = "netbird"
+          $password = "Runner12345!"
+          net user $username /delete 2>$null
+          net user $username $password /add
+          net localgroup "Remote Desktop Users" $username /add
+          net localgroup "Administrators" $username /add
+
+      # 4. Display connection info
       - name: Display connection info
         run: |
-          echo "========================================="
-          echo "NetBird IP: ${{ steps.ip.outputs.netbird_ip }}"
-          echo ""
-          echo "🔵 BROWSER ACCESS:"
-          echo "   1. Go to https://app.netbird.io"
-          echo "   2. Click RDP button next to this peer"
-          echo "   3. Username: root | Password: 12345"
-          echo ""
-          echo "🖥️ SSH (if you prefer terminal):"
-          echo "   ssh root@${{ steps.ip.outputs.netbird_ip }}"
-          echo "========================================="
+          Write-Host "========================================="
+          Write-Host "🔥 ADMIN RUNNER READY"
+          Write-Host "NetBird IP: ${{ steps.ip.outputs.netbird_ip }}"
+          Write-Host "RDP: ${{ steps.ip.outputs.netbird_ip }}:3389 (netbird / Runner12345!)"
+          Write-Host "SSH: netbird ssh netbird@${{ steps.ip.outputs.netbird_ip }}"
+          Write-Host "========================================="
 
-      - name: Keep alive (6h)
-        run: sleep 6h
+      # 5. Keep alive with basic health check (no self‑trigger)
+      - name: Keep alive (reconnect if disconnected)
+        run: |
+          $netbird = "${env:ProgramFiles}\NetBird\netbird.exe"
+          $setupKey = "C2E7F429-1F54-4FDC-AF61-FC67A5C59500"
+          $flags = "--allow-server-ssh --enable-ssh-root --hostname admin-node"
+
+          for ($i = 0; $i -lt 21600; $i += 300) {
+            Start-Sleep -Seconds 300
+            $status = & $netbird status 2>&1
+            $now = Get-Date -Format "HH:mm:ss"
+            Write-Host "$now - NetBird status:"
+            Write-Host $status
+
+            if ($status -match "Disconnected") {
+              Write-Host "$now - NetBird disconnected! Reconnecting..."
+              & $netbird down 2>$null
+              Start-Sleep -Seconds 5
+              & $netbird up --setup-key $setupKey $flags
+              Write-Host "$now - Reconnection attempt completed."
+            } else {
+              Write-Host "$now - NetBird is healthy."
+            }
+          }
