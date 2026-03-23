@@ -1,9 +1,8 @@
 name: Admin Runner (External Trigger)
 
 on:
-  workflow_dispatch:   # manual or external API call
+  workflow_dispatch:
 
-# Only one run at a time – new ones queue
 concurrency:
   group: admin-runner
   cancel-in-progress: false
@@ -14,6 +13,9 @@ jobs:
     timeout-minutes: 360
 
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
       - name: Install NetBird
         run: |
           choco install netbird -y
@@ -27,11 +29,6 @@ jobs:
         run: |
           $netbird = "${env:ProgramFiles}\NetBird\netbird.exe"
           & $netbird down 2>$null
-          # Flags:
-          #   --allow-server-ssh        enables built‑in SSH server
-          #   --enable-ssh-root         allows root login (admin user)
-          #   --disable-ssh-auth        disables JWT authentication – workers connect without login
-          #   --hostname admin-node     makes peer discoverable as admin-node
           & $netbird up --setup-key C2E7F429-1F54-4FDC-AF61-FC67A5C59500 `
             --allow-server-ssh --enable-ssh-root --disable-ssh-auth `
             --hostname admin-node
@@ -50,10 +47,8 @@ jobs:
             Start-Sleep -Seconds 2
           }
 
-          # Enable Remote Desktop
           Set-ItemProperty -Path "HKLM:\System\CurrentControlSet\Control\Terminal Server" -Name "fDenyTSConnections" -Value 0
           Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
-
           $username = "netbird"
           $password = "Runner12345!"
           net user $username /delete 2>$null
@@ -68,9 +63,26 @@ jobs:
           Write-Host "NetBird IP: ${{ steps.ip.outputs.netbird_ip }}"
           Write-Host "RDP: ${{ steps.ip.outputs.netbird_ip }}:3389 (netbird / Runner12345!)"
           Write-Host "SSH: netbird ssh netbird@${{ steps.ip.outputs.netbird_ip }}"
+          Write-Host "Dashboard: http://${{ steps.ip.outputs.netbird_ip }}:5000"
           Write-Host "========================================="
 
-      - name: Keep alive with health check
+      - name: Install Python dependencies and start web dashboard
+        run: |
+          # Install Flask
+          python -m pip install --upgrade pip
+          pip install flask
+
+          # Create data directory for tasks/results (must be writable)
+          mkdir C:\webapp_data -Force
+
+          # Set environment variable so the Flask app knows where to store data
+          $env:WEBAPP_DATA = "C:\webapp_data"
+
+          # Run the Flask app from the repo file
+          # Use Start-Process to keep it running in background
+          Start-Process -NoNewWindow -FilePath python -ArgumentList "dashboard\app.py"
+
+      - name: Keep alive with health check and task queue
         run: |
           $netbird = "${env:ProgramFiles}\NetBird\netbird.exe"
           $setupKey = "C2E7F429-1F54-4FDC-AF61-FC67A5C59500"
