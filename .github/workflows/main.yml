@@ -61,60 +61,26 @@ jobs:
           Set-NetFirewallProfile -All -Enabled False
           Write-Host "Firewall disabled – dashboard will be reachable"
 
-      - name: Install Python dependencies and start Flask dashboard (detached)
+      - name: Install Python, Flask, Waitress, and start dashboard
         run: |
           python -m pip install --upgrade pip
-          pip install flask
+          pip install flask waitress
           mkdir C:\webapp_data -Force
           $env:WEBAPP_DATA = "C:\webapp_data"
-
-          $scriptPath = Join-Path $env:GITHUB_WORKSPACE "dashboard\app.py"
-          $stdoutLog = "C:\flask_stdout.log"
-          $stderrLog = "C:\flask_stderr.log"
-          Write-Host "Starting Flask from $scriptPath ..."
-          $process = Start-Process -FilePath python -ArgumentList $scriptPath `
-            -RedirectStandardOutput $stdoutLog -RedirectStandardError $stderrLog `
-            -WindowStyle Hidden -PassThru
-          $flaskPid = $process.Id
-          Write-Host "Flask process started with PID $flaskPid"
-
+          cd $env:GITHUB_WORKSPACE
+          Write-Host "Starting waitress server on port 5000..."
+          # Start waitress in background, no redirection
+          $process = Start-Process -NoNewWindow -FilePath python -ArgumentList "-m waitress --host=0.0.0.0 --port=5000 dashboard.app:app" -PassThru
+          Write-Host "Waitress started with PID $($process.Id)"
           Start-Sleep -Seconds 10
-          $stillRunning = Get-Process -Id $flaskPid -ErrorAction SilentlyContinue
-          if ($stillRunning) {
-            Write-Host "Flask process is still running."
-          } else {
-            Write-Host "Flask process terminated. Stdout log:"
-            Get-Content $stdoutLog -ErrorAction SilentlyContinue
-            Write-Host "Stderr log:"
-            Get-Content $stderrLog -ErrorAction SilentlyContinue
-          }
+          # Verify listening
           netstat -an | findstr :5000
-
-      - name: Debug Flask logs and port
-        run: |
-          Write-Host "=== Flask stdout log ==="
-          Get-Content C:\flask_stdout.log -ErrorAction SilentlyContinue
-          Write-Host "=== Flask stderr log ==="
-          Get-Content C:\flask_stderr.log -ErrorAction SilentlyContinue
-          Write-Host "=== Testing port with Test-NetConnection ==="
-          Test-NetConnection -ComputerName localhost -Port 5000
-
-      - name: Verify dashboard reachability
-        run: |
-          $adminIp = "${{ steps.ip.outputs.netbird_ip }}"
-          Write-Host "Testing localhost:5000..."
+          # Test local connection
           try {
             $resp = Invoke-RestMethod -Uri http://localhost:5000 -TimeoutSec 5
-            Write-Host "Local test SUCCESS"
+            Write-Host "Dashboard is reachable locally."
           } catch {
-            Write-Host "Local test FAILED: $_"
-          }
-          Write-Host "Testing NetBird IP $adminIp`:5000..."
-          try {
-            $resp = Invoke-RestMethod -Uri "http://$adminIp`:5000" -TimeoutSec 5
-            Write-Host "NetBird IP test SUCCESS"
-          } catch {
-            Write-Host "NetBird IP test FAILED: $_"
+            Write-Host "Dashboard local test failed: $_"
           }
 
       - name: Display connection info
