@@ -267,10 +267,24 @@ HTML_TEMPLATE = '''
                 if (workers.length === 0) {
                     workersContainer.innerHTML = '<div class="text-gray-500 italic text-sm">No nodes connected.</div>';
                 } else {
+                    const timeAgo = (dateStr) => {
                     const now = new Date();
-                    workersContainer.innerHTML = workers.map(w => {
-                        const lastSeenDate = new Date(w.lastSeen);
-                        const isOnline = ((now - lastSeenDate) / 1000 / 60) < 5;
+                    const utcNow = Date.UTC(
+                    now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(),
+                    now.getUTCHours(), now.getUTCMinutes(), now.getUTCSeconds()
+                );
+                    const timeAgo = (dateStr) => {
+        const now = new Date();
+        const utcNow = Date.UTC(
+            now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(),
+            now.getUTCHours(), now.getUTCMinutes(), now.getUTCSeconds()
+        );
+        const then = new Date(dateStr).getTime();
+        const seconds = Math.floor((utcNow - then) / 1000);
+        if (seconds < 60) return "Just now";
+        if (seconds < 3600) return Math.floor(seconds / 60) + "m ago";
+        return Math.floor(seconds / 3600) + "h ago";
+    };
                         
                         return `
                         <div class="bg-gray-800/40 border border-gray-700 p-3 rounded-lg flex items-center justify-between hover:bg-gray-800 transition-colors">
