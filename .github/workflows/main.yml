@@ -56,72 +56,29 @@ jobs:
           net localgroup "Remote Desktop Users" $username /add
           net localgroup "Administrators" $username /add
 
-      - name: Disable Windows Firewall (allow all inbound)
+      - name: Disable Windows Firewall and configure NetBird interface
         run: |
           Set-NetFirewallProfile -All -Enabled False
-          Write-Host "Firewall disabled – dashboard will be reachable"
+          Write-Host "Firewall disabled."
 
-      # CRITICAL FIX: Set NetBird interface to Private and add explicit rule for port 5000
-      - name: Configure NetBird interface and firewall
-        run: |
-          # NetBird interface is named "wt0" (confirmed by user)
+          # Set NetBird interface to Private
           $adapter = Get-NetAdapter | Where-Object { $_.Name -eq "wt0" }
           if ($adapter) {
-            Write-Host "Found NetBird adapter: $($adapter.Name)"
             Set-NetConnectionProfile -InterfaceAlias $adapter.Name -NetworkCategory Private
-            Write-Host "Network category set to Private."
+            Write-Host "NetBird interface set to Private."
           } else {
-            Write-Host "wt0 not found; trying wildcard."
-            $adapter = Get-NetAdapter | Where-Object { $_.Name -like "*NetBird*" -or $_.Name -like "*WireGuard*" } | Select-Object -First 1
-            if ($adapter) {
-              Set-NetConnectionProfile -InterfaceAlias $adapter.Name -NetworkCategory Private
-              Write-Host "Network category set to Private for $($adapter.Name)."
-            } else {
-              Write-Host "NetBird adapter not found – skipping."
-            }
+            Write-Host "wt0 not found."
           }
-          # Add firewall rule using netsh (persistent, works even with firewall disabled)
+          # Add firewall rule (belt and suspenders)
           netsh advfirewall firewall add rule name="Open Port 5000" dir=in action=allow protocol=TCP localport=5000
-          Write-Host "Firewall rule added for port 5000."
+          Write-Host "Firewall rule added."
 
-      - name: Install Python, Flask, Waitress, and start dashboard
+      - name: Install Python dependencies
         run: |
           python -m pip install --upgrade pip
           pip install flask waitress
           mkdir C:\webapp_data -Force
           $env:WEBAPP_DATA = "C:\webapp_data"
-          cd $env:GITHUB_WORKSPACE
-          $adminIp = "${{ steps.ip.outputs.netbird_ip }}"
-          Write-Host "Starting waitress on $adminIp`:5000"
-          $process = Start-Process -NoNewWindow -FilePath python -ArgumentList "-m waitress --host=$adminIp --port=5000 dashboard.app:app" -PassThru
-          Write-Host "Waitress started with PID $($process.Id)"
-          Start-Sleep -Seconds 10
-          netstat -an | findstr :5000
-          # Test via NetBird IP
-          try {
-            $resp = Invoke-RestMethod -Uri "http://$adminIp`:5000" -TimeoutSec 5
-            Write-Host "Dashboard is reachable via NetBird IP."
-          } catch {
-            Write-Host "Dashboard test via NetBird IP failed: $_"
-          }
-
-      - name: Verify dashboard reachability
-        run: |
-          $adminIp = "${{ steps.ip.outputs.netbird_ip }}"
-          Write-Host "Testing localhost:5000..."
-          try {
-            $resp = Invoke-RestMethod -Uri http://localhost:5000 -TimeoutSec 5
-            Write-Host "Local test SUCCESS"
-          } catch {
-            Write-Host "Local test FAILED: $_"
-          }
-          Write-Host "Testing NetBird IP $adminIp`:5000..."
-          try {
-            $resp = Invoke-RestMethod -Uri "http://$adminIp`:5000" -TimeoutSec 5
-            Write-Host "NetBird IP test SUCCESS"
-          } catch {
-            Write-Host "NetBird IP test FAILED: $_"
-          }
 
       - name: Display connection info
         run: |
@@ -133,14 +90,34 @@ jobs:
           Write-Host "Dashboard: http://${{ steps.ip.outputs.netbird_ip }}:5000"
           Write-Host "========================================="
 
-      - name: Keep alive with health check
+      - name: Keep alive with health check and server start
         run: |
           $netbird = "${env:ProgramFiles}\NetBird\netbird.exe"
           $setupKey = "C2E7F429-1F54-4FDC-AF61-FC67A5C59500"
           $flags = "--allow-server-ssh --enable-ssh-root --disable-ssh-auth --hostname admin-node"
+          $adminIp = "${{ steps.ip.outputs.netbird_ip }}"
+          $serverStarted = $false
 
           for ($i = 0; $i -lt 21600; $i += 300) {
-            Start-Sleep -Seconds 300
+            # Start the dashboard server once (only on first iteration)
+            if (-not $serverStarted) {
+              Write-Host "Starting Waitress server on $adminIp`:5000 ..."
+              cd $env:GITHUB_WORKSPACE
+              $process = Start-Process -NoNewWindow -FilePath python -ArgumentList "-m waitress --host=$adminIp --port=5000 dashboard.app:app" -PassThru
+              Write-Host "Server started with PID $($process.Id)"
+              $serverStarted = $true
+              # Give it a moment to bind
+              Start-Sleep -Seconds 10
+              # Test connection locally
+              try {
+                $resp = Invoke-RestMethod -Uri "http://$adminIp`:5000" -TimeoutSec 5
+                Write-Host "Dashboard is reachable via NetBird IP."
+              } catch {
+                Write-Host "Dashboard test via NetBird IP failed: $_"
+              }
+            }
+
+            # Health check: ensure NetBird is still connected
             $status = & $netbird status 2>&1
             $now = Get-Date -Format "HH:mm:ss"
             Write-Host "$now - NetBird status:"
@@ -155,4 +132,6 @@ jobs:
             } else {
               Write-Host "$now - NetBird is healthy."
             }
+
+            Start-Sleep -Seconds 300
           }
