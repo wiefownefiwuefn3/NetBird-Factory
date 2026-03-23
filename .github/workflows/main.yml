@@ -1,4 +1,4 @@
-name: Admin Runner (External Trigger)
+name: Admin Runner (with Discord Bot)
 
 on:
   workflow_dispatch:
@@ -61,28 +61,48 @@ jobs:
           Set-NetFirewallProfile -All -Enabled False
           Write-Host "Firewall disabled."
 
-          # Set NetBird interface to Private
           $adapter = Get-NetAdapter | Where-Object { $_.Name -eq "wt0" }
           if ($adapter) {
             Set-NetConnectionProfile -InterfaceAlias $adapter.Name -NetworkCategory Private
             Write-Host "NetBird interface set to Private."
-          } else {
-            Write-Host "wt0 not found."
           }
-          # Add firewall rule (belt and suspenders)
           netsh advfirewall firewall add rule name="Open Port 5000" dir=in action=allow protocol=TCP localport=5000
           Write-Host "Firewall rule added."
-
-          # Restart NetBird to apply network category change
-          Restart-Service NetBird
-          Write-Host "NetBird service restarted."
 
       - name: Install Python dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install flask waitress
+          pip install flask waitress discord.py aiohttp
           mkdir C:\webapp_data -Force
           $env:WEBAPP_DATA = "C:\webapp_data"
+
+      - name: Start Flask dashboard
+        run: |
+          cd $env:GITHUB_WORKSPACE
+          $adminIp = "${{ steps.ip.outputs.netbird_ip }}"
+          Write-Host "Starting Waitress on $adminIp`:5000"
+          $process = Start-Process -NoNewWindow -FilePath python -ArgumentList "-m waitress --host=$adminIp --port=5000 dashboard.app:app" -PassThru
+          Write-Host "Waitress started with PID $($process.Id)"
+          Start-Sleep -Seconds 10
+          netstat -an | findstr :5000
+          try {
+            $resp = Invoke-RestMethod -Uri "http://$adminIp`:5000" -TimeoutSec 5
+            Write-Host "Dashboard reachable."
+          } catch {
+            Write-Host "Dashboard test failed: $_"
+          }
+
+      - name: Start Discord bot
+        env:
+          DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
+          DISCORD_GUILD_ID: ${{ secrets.DISCORD_GUILD_ID }}
+        run: |
+          cd $env:GITHUB_WORKSPACE
+          Write-Host "Starting Discord bot..."
+          $botProcess = Start-Process -NoNewWindow -FilePath python -ArgumentList "dashboard/discord_bot.py" -PassThru
+          Write-Host "Bot started with PID $($botProcess.Id)"
+          Start-Sleep -Seconds 5
+          Write-Host "Bot should now be online."
 
       - name: Display connection info
         run: |
@@ -92,58 +112,17 @@ jobs:
           Write-Host "RDP: ${{ steps.ip.outputs.netbird_ip }}:3389 (netbird / Runner12345!)"
           Write-Host "SSH: netbird ssh netbird@${{ steps.ip.outputs.netbird_ip }}"
           Write-Host "Dashboard: http://${{ steps.ip.outputs.netbird_ip }}:5000"
+          Write-Host "Discord bot: online (check your server)"
           Write-Host "========================================="
 
-      - name: Keep alive with health check and server monitor
+      - name: Keep alive with health check
         run: |
           $netbird = "${env:ProgramFiles}\NetBird\netbird.exe"
           $setupKey = "C2E7F429-1F54-4FDC-AF61-FC67A5C59500"
           $flags = "--allow-server-ssh --enable-ssh-root --disable-ssh-auth --hostname admin-node"
-          $adminIp = "${{ steps.ip.outputs.netbird_ip }}"
-          $serverPid = $null
-
-          function Start-Dashboard {
-            Write-Host "Starting Waitress server on $adminIp`:5000 ..."
-            cd $env:GITHUB_WORKSPACE
-            $proc = Start-Process -NoNewWindow -FilePath python -ArgumentList "-m waitress --host=$adminIp --port=5000 dashboard.app:app" -PassThru
-            return $proc.Id
-          }
-
-          # Initial server start
-          $serverPid = Start-Dashboard
-          Write-Host "Server started with PID $serverPid"
-          Start-Sleep -Seconds 10
-
-          # Test initial reachability
-          try {
-            $resp = Invoke-RestMethod -Uri "http://$adminIp`:5000" -TimeoutSec 5
-            Write-Host "Dashboard is reachable via NetBird IP."
-          } catch {
-            Write-Host "Initial dashboard test failed: $_"
-          }
 
           for ($i = 0; $i -lt 21600; $i += 300) {
-            # Check if server process is still alive
-            $stillRunning = Get-Process -Id $serverPid -ErrorAction SilentlyContinue
-            if (-not $stillRunning) {
-              Write-Host "Server process died. Restarting..."
-              $serverPid = Start-Dashboard
-              Start-Sleep -Seconds 5
-            }
-
-            # Test dashboard connectivity from admin itself (using NetBird IP)
-            try {
-              $resp = Invoke-RestMethod -Uri "http://$adminIp`:5000" -TimeoutSec 5
-              Write-Host "Dashboard health check OK."
-            } catch {
-              Write-Host "Dashboard health check FAILED: $_. Attempting restart..."
-              # Kill old process if any
-              if ($stillRunning) { Stop-Process -Id $serverPid -Force -ErrorAction SilentlyContinue }
-              $serverPid = Start-Dashboard
-              Start-Sleep -Seconds 5
-            }
-
-            # NetBird health check
+            Start-Sleep -Seconds 300
             $status = & $netbird status 2>&1
             $now = Get-Date -Format "HH:mm:ss"
             Write-Host "$now - NetBird status:"
@@ -158,6 +137,4 @@ jobs:
             } else {
               Write-Host "$now - NetBird is healthy."
             }
-
-            Start-Sleep -Seconds 300
           }
