@@ -3,13 +3,18 @@ name: Admin Runner (External Trigger)
 on:
   workflow_dispatch:   # manual trigger (and external API call)
 
+# Only one run at a time – new ones queue
+concurrency:
+  group: admin-runner
+  cancel-in-progress: false
+
 jobs:
   admin:
     runs-on: windows-latest
-    timeout-minutes: 360   # 6 hours max
+    timeout-minutes: 360
 
     steps:
-      # 1. Install NetBird
+      # (your existing steps – unchanged)
       - name: Install NetBird
         run: |
           choco install netbird -y
@@ -19,7 +24,6 @@ jobs:
             Start-Process -FilePath "$env:TEMP\netbird_installer.exe" -ArgumentList "/S" -Wait
           }
 
-      # 2. Connect to NetBird with SSH + root allowed, and set recognizable hostname
       - name: Connect to NetBird
         run: |
           $netbird = "${env:ProgramFiles}\NetBird\netbird.exe"
@@ -28,7 +32,6 @@ jobs:
             --allow-server-ssh --enable-ssh-root `
             --hostname admin-node
 
-      # 3. Wait for IP and enable RDP
       - name: Wait for IP and enable RDP
         id: ip
         run: |
@@ -43,7 +46,6 @@ jobs:
             Start-Sleep -Seconds 2
           }
 
-          # Enable Remote Desktop
           Set-ItemProperty -Path "HKLM:\System\CurrentControlSet\Control\Terminal Server" -Name "fDenyTSConnections" -Value 0
           Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
 
@@ -54,7 +56,6 @@ jobs:
           net localgroup "Remote Desktop Users" $username /add
           net localgroup "Administrators" $username /add
 
-      # 4. Display connection info
       - name: Display connection info
         run: |
           Write-Host "========================================="
@@ -64,8 +65,7 @@ jobs:
           Write-Host "SSH: netbird ssh netbird@${{ steps.ip.outputs.netbird_ip }}"
           Write-Host "========================================="
 
-      # 5. Keep alive with basic health check (no self‑trigger)
-      - name: Keep alive (reconnect if disconnected)
+      - name: Keep alive with health check
         run: |
           $netbird = "${env:ProgramFiles}\NetBird\netbird.exe"
           $setupKey = "C2E7F429-1F54-4FDC-AF61-FC67A5C59500"
