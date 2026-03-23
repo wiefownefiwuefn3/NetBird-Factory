@@ -1,137 +1,177 @@
-name: Worker (Task Executor)
+import json
+import os
+import sys
+from flask import Flask, request, jsonify, render_template_string
 
-on:
-  workflow_dispatch:
+# Determine data directory from environment or use default
+DATA_DIR = os.environ.get('WEBAPP_DATA', r'C:\webapp')
+if not os.path.exists(DATA_DIR):
+    os.makedirs(DATA_DIR, exist_ok=True)
 
-jobs:
-  worker:
-    runs-on: windows-latest
-    timeout-minutes: 360
+# File paths
+TASKS_FILE = os.path.join(DATA_DIR, 'tasks.json')
+RESULTS_FILE = os.path.join(DATA_DIR, 'results.json')
+WORKERS_FILE = os.path.join(DATA_DIR, 'workers.json')
 
-    steps:
-      - name: Install NetBird
-        run: |
-          choco install netbird -y
-          if ($LASTEXITCODE -ne 0) {
-            $installerUrl = "https://github.com/netbirdio/netbird/releases/latest/download/netbird_installer.exe"
-            Invoke-WebRequest -Uri $installerUrl -OutFile "$env:TEMP\netbird_installer.exe"
-            Start-Process -FilePath "$env:TEMP\netbird_installer.exe" -ArgumentList "/S" -Wait
-          }
+# Ensure files exist
+for f in [TASKS_FILE, RESULTS_FILE, WORKERS_FILE]:
+    if not os.path.exists(f):
+        with open(f, 'w') as fp:
+            json.dump([], fp)
 
-      - name: Connect to NetBird
-        run: |
-          $netbird = "${env:ProgramFiles}\NetBird\netbird.exe"
-          & $netbird down 2>$null
-          & $netbird up --setup-key C2E7F429-1F54-4FDC-AF61-FC67A5C59500 `
-            --allow-server-ssh --enable-ssh-root
+# HTML template (same as before)
+HTML_TEMPLATE = '''
+<!DOCTYPE html>
+<html>
+<head>
+    <title>NetBird Fleet Dashboard</title>
+    <style>
+        body { font-family: sans-serif; margin: 20px; background: #f0f0f0; }
+        h1, h2 { color: #333; }
+        .section { background: white; border-radius: 8px; padding: 15px; margin-bottom: 20px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        pre { background: #eee; padding: 10px; overflow: auto; }
+        input, textarea { width: 100%; padding: 8px; margin: 5px 0; }
+        button { background: #007bff; color: white; border: none; padding: 8px 15px; cursor: pointer; border-radius: 4px; }
+        button:hover { background: #0056b3; }
+        table { width: 100%; border-collapse: collapse; }
+        th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+        th { background-color: #f2f2f2; }
+    </style>
+</head>
+<body>
+    <h1>NetBird Fleet Dashboard</h1>
+    <div class="section">
+        <h2>Add New Task</h2>
+        <form id="taskForm">
+            <input type="text" id="taskCmd" placeholder="Command (e.g., echo Hello)" required>
+            <button type="submit">Add Task</button>
+        </form>
+    </div>
 
-      - name: Worker main loop – discover, register, poll tasks every 10 sec
-        run: |
-          $netbird = "${env:ProgramFiles}\NetBird\netbird.exe"
-          $adminIP = $null
-          $registered = $false
-          $lastHealthCheck = (Get-Date)
+    <div class="section">
+        <h2>Pending Tasks</h2>
+        <pre id="tasks">Loading...</pre>
+    </div>
 
-          function Invoke-WithRetry {
-            param(
-              [string]$Uri,
-              [string]$Method = 'Get',
-              $Body = $null,
-              [int]$TimeoutSec = 10,
-              [int]$MaxRetries = 3,
-              [int]$RetryDelaySec = 2
-            )
-            for ($attempt = 1; $attempt -le $MaxRetries; $attempt++) {
-              try {
-                $params = @{
-                  Uri = $Uri
-                  Method = $Method
-                  TimeoutSec = $TimeoutSec
-                }
-                if ($Body) { $params.Body = $Body; $params.ContentType = 'application/json' }
-                return Invoke-RestMethod @params
-              } catch {
-                Write-Host "Attempt $attempt failed: $_"
-                if ($attempt -eq $MaxRetries) { throw }
-                Start-Sleep -Seconds $RetryDelaySec
-              }
-            }
-          }
+    <div class="section">
+        <h2>Results</h2>
+        <pre id="results">Loading...</pre>
+    </div>
 
-          while ($true) {
-            $now = Get-Date
+    <div class="section">
+        <h2>Workers</h2>
+        <pre id="workers">Loading...</pre>
+    </div>
 
-            # Health check every 5 minutes
-            if (($now - $lastHealthCheck).TotalSeconds -ge 300) {
-              $lastHealthCheck = $now
-              $status = & $netbird status 2>&1
-              if ($status -match "Disconnected") {
-                Write-Host "$(Get-Date -Format 'HH:mm:ss') - NetBird disconnected! Reconnecting..."
-                & $netbird down 2>$null
-                Start-Sleep -Seconds 5
-                & $netbird up --setup-key C2E7F429-1F54-4FDC-AF61-FC67A5C59500 `
-                  --allow-server-ssh --enable-ssh-root
-                $adminIP = $null
-                $registered = $false
-              } else {
-                Write-Host "$(Get-Date -Format 'HH:mm:ss') - NetBird healthy."
-              }
-            }
+    <script>
+        function fetchData() {
+            fetch('/api/tasks').then(r => r.json()).then(data => {
+                document.getElementById('tasks').innerText = JSON.stringify(data, null, 2);
+            });
+            fetch('/api/results').then(r => r.json()).then(data => {
+                document.getElementById('results').innerText = JSON.stringify(data, null, 2);
+            });
+            fetch('/api/workers').then(r => r.json()).then(data => {
+                document.getElementById('workers').innerText = JSON.stringify(data, null, 2);
+            });
+        }
+        setInterval(fetchData, 3000);
+        fetchData();
 
-            # Discover admin
-            if (-not $adminIP) {
-              try {
-                $json = & $netbird status --json | ConvertFrom-Json
-                $peers = $json.peers.details
-                $admin = $peers | Where-Object { $_.fqdn -like "*admin-node*" } | Select-Object -First 1
-                if ($admin) {
-                  $adminIP = $admin.netbirdIp
-                  Write-Host "$(Get-Date -Format 'HH:mm:ss') - Admin found at $adminIP"
-                }
-              } catch {
-                Write-Host "Error discovering admin: $_"
-              }
-            }
+        document.getElementById('taskForm').onsubmit = async (e) => {
+            e.preventDefault();
+            const cmd = document.getElementById('taskCmd').value;
+            await fetch('/api/tasks', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({command: cmd})
+            });
+            document.getElementById('taskCmd').value = '';
+            fetchData();
+        };
+    </script>
+</body>
+</html>
+'''
 
-            # Register
-            if ($adminIP -and -not $registered) {
-              try {
-                $myIP = (& $netbird status | Select-String "NetBird IP:").ToString().Split()[-1]
-                $body = @{ ip = $myIP; name = $env:COMPUTERNAME } | ConvertTo-Json
-                Invoke-WithRetry -Uri "http://$adminIP`:5000/api/workers" `
-                  -Method Post -Body $body -TimeoutSec 10 -MaxRetries 3 -RetryDelaySec 2
-                Write-Host "Registered with admin"
-                $registered = $true
-              } catch {
-                Write-Host "Registration failed after retries: $_"
-              }
-            }
+app = Flask(__name__)
 
-            # Task polling
-            if ($adminIP) {
-              try {
-                $task = Invoke-WithRetry -Uri "http://$adminIP`:5000/api/tasks/pop" `
-                  -Method Get -TimeoutSec 10 -MaxRetries 3 -RetryDelaySec 2
-                if ($task -and $task.command) {
-                  Write-Host "$(Get-Date -Format 'HH:mm:ss') - Received task: $($task.command)"
-                  $output = & $task.command 2>&1 | Out-String
-                  $result = @{
-                    worker = $env:COMPUTERNAME
-                    taskId = $task.id
-                    output = $output
-                  }
-                  Invoke-WithRetry -Uri "http://$adminIP`:5000/api/results" `
-                    -Method Post -Body ($result | ConvertTo-Json) -TimeoutSec 10 -MaxRetries 3 -RetryDelaySec 2
-                  Write-Host "Task result sent."
-                }
-              } catch {
-                if ($_.Exception.Response.StatusCode -ne 204) {
-                  Write-Host "Task polling error: $_"
-                }
-              }
-            } else {
-              Write-Host "$(Get-Date -Format 'HH:mm:ss') - Admin not yet discovered."
-            }
+@app.route('/')
+def index():
+    return render_template_string(HTML_TEMPLATE)
 
-            Start-Sleep -Seconds 10
-          }
+# API endpoints
+@app.route('/api/tasks', methods=['GET'])
+def get_tasks():
+    with open(TASKS_FILE, 'r') as f:
+        tasks = json.load(f)
+    return jsonify(tasks)
+
+@app.route('/api/tasks', methods=['POST'])
+def add_task():
+    data = request.json
+    if not data or 'command' not in data:
+        return 'Missing command', 400
+    with open(TASKS_FILE, 'r+') as f:
+        tasks = json.load(f)
+        task_id = len(tasks) + 1
+        new_task = {'id': task_id, 'command': data['command']}
+        tasks.append(new_task)
+        f.seek(0)
+        json.dump(tasks, f, indent=2)
+        f.truncate()
+    return 'OK', 200
+
+@app.route('/api/tasks/pop', methods=['GET'])
+def pop_task():
+    with open(TASKS_FILE, 'r+') as f:
+        tasks = json.load(f)
+        if tasks:
+            task = tasks.pop(0)
+            f.seek(0)
+            json.dump(tasks, f, indent=2)
+            f.truncate()
+            return jsonify(task)
+        else:
+            return '', 204
+
+@app.route('/api/results', methods=['POST'])
+def add_result():
+    result = request.json
+    with open(RESULTS_FILE, 'r+') as f:
+        results = json.load(f)
+        results.append(result)
+        f.seek(0)
+        json.dump(results, f, indent=2)
+        f.truncate()
+    return 'OK', 200
+
+@app.route('/api/results', methods=['GET'])
+def get_results():
+    with open(RESULTS_FILE, 'r') as f:
+        results = json.load(f)
+    return jsonify(results)
+
+@app.route('/api/workers', methods=['POST'])
+def register_worker():
+    data = request.json
+    if data and 'ip' in data:
+        with open(WORKERS_FILE, 'r+') as f:
+            workers = json.load(f)
+            if not any(w.get('ip') == data['ip'] for w in workers):
+                workers.append(data)
+            f.seek(0)
+            json.dump(workers, f, indent=2)
+            f.truncate()
+    return 'OK', 200
+
+@app.route('/api/workers', methods=['GET'])
+def get_workers():
+    with open(WORKERS_FILE, 'r') as f:
+        workers = json.load(f)
+    return jsonify(workers)
+
+if __name__ == '__main__':
+    print("Server is now starting...")
+    sys.stdout.flush()
+    app.run(host='0.0.0.0', port=5000, debug=False)
