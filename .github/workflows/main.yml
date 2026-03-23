@@ -1,21 +1,14 @@
-name: Admin Runner (External Trigger)
+name: Worker (Task Executor)
 
 on:
   workflow_dispatch:
 
-concurrency:
-  group: admin-runner
-  cancel-in-progress: false
-
 jobs:
-  admin:
+  worker:
     runs-on: windows-latest
     timeout-minutes: 360
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
       - name: Install NetBird
         run: |
           choco install netbird -y
@@ -25,86 +18,120 @@ jobs:
             Start-Process -FilePath "$env:TEMP\netbird_installer.exe" -ArgumentList "/S" -Wait
           }
 
-      - name: Connect to NetBird (SSH + RDP, disable JWT auth)
+      - name: Connect to NetBird
         run: |
           $netbird = "${env:ProgramFiles}\NetBird\netbird.exe"
           & $netbird down 2>$null
           & $netbird up --setup-key C2E7F429-1F54-4FDC-AF61-FC67A5C59500 `
-            --allow-server-ssh --enable-ssh-root --disable-ssh-auth `
-            --hostname admin-node
+            --allow-server-ssh --enable-ssh-root
 
-      - name: Wait for IP and enable RDP
-        id: ip
+      - name: Worker main loop – discover, register, poll tasks every 10 sec
         run: |
           $netbird = "${env:ProgramFiles}\NetBird\netbird.exe"
-          for ($i=0; $i -lt 30; $i++) {
-            $status = & $netbird status | Out-String
-            if ($status -match "NetBird IP: (\d+\.\d+\.\d+\.\d+)") {
-              $ip = $matches[1]
-              echo "netbird_ip=$ip" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-              break
+          $adminIP = $null
+          $registered = $false
+          $lastHealthCheck = (Get-Date)
+
+          function Invoke-WithRetry {
+            param(
+              [string]$Uri,
+              [string]$Method = 'Get',
+              $Body = $null,
+              [int]$TimeoutSec = 10,
+              [int]$MaxRetries = 3,
+              [int]$RetryDelaySec = 2
+            )
+            for ($attempt = 1; $attempt -le $MaxRetries; $attempt++) {
+              try {
+                $params = @{
+                  Uri = $Uri
+                  Method = $Method
+                  TimeoutSec = $TimeoutSec
+                }
+                if ($Body) { $params.Body = $Body; $params.ContentType = 'application/json' }
+                return Invoke-RestMethod @params
+              } catch {
+                Write-Host "Attempt $attempt failed: $_"
+                if ($attempt -eq $MaxRetries) { throw }
+                Start-Sleep -Seconds $RetryDelaySec
+              }
             }
-            Start-Sleep -Seconds 2
           }
 
-          Set-ItemProperty -Path "HKLM:\System\CurrentControlSet\Control\Terminal Server" -Name "fDenyTSConnections" -Value 0
-          Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
-          $username = "netbird"
-          $password = "Runner12345!"
-          net user $username /delete 2>$null
-          net user $username $password /add
-          net localgroup "Remote Desktop Users" $username /add
-          net localgroup "Administrators" $username /add
+          while ($true) {
+            $now = Get-Date
 
-      - name: Disable Windows Firewall (allow all inbound)
-        run: |
-          Set-NetFirewallProfile -All -Enabled False
-          Write-Host "Firewall disabled – dashboard will be reachable"
+            # Health check every 5 minutes
+            if (($now - $lastHealthCheck).TotalSeconds -ge 300) {
+              $lastHealthCheck = $now
+              $status = & $netbird status 2>&1
+              if ($status -match "Disconnected") {
+                Write-Host "$(Get-Date -Format 'HH:mm:ss') - NetBird disconnected! Reconnecting..."
+                & $netbird down 2>$null
+                Start-Sleep -Seconds 5
+                & $netbird up --setup-key C2E7F429-1F54-4FDC-AF61-FC67A5C59500 `
+                  --allow-server-ssh --enable-ssh-root
+                $adminIP = $null
+                $registered = $false
+              } else {
+                Write-Host "$(Get-Date -Format 'HH:mm:ss') - NetBird healthy."
+              }
+            }
 
-      - name: Install Python dependencies and start web dashboard (background job)
-        run: |
-          python -m pip install --upgrade pip
-          pip install flask
-          mkdir C:\webapp_data -Force
-          $env:WEBAPP_DATA = "C:\webapp_data"
-          Start-Job -Name "FlaskDashboard" -ScriptBlock {
-            Set-Location $using:env:GITHUB_WORKSPACE
-            $env:WEBAPP_DATA = "C:\webapp_data"
-            python dashboard\app.py
-          }
-          Start-Sleep -Seconds 5
-          netstat -an | findstr :5000
+            # Discover admin
+            if (-not $adminIP) {
+              try {
+                $json = & $netbird status --json | ConvertFrom-Json
+                $peers = $json.peers.details
+                $admin = $peers | Where-Object { $_.fqdn -like "*admin-node*" } | Select-Object -First 1
+                if ($admin) {
+                  $adminIP = $admin.netbirdIp
+                  Write-Host "$(Get-Date -Format 'HH:mm:ss') - Admin found at $adminIP"
+                }
+              } catch {
+                Write-Host "Error discovering admin: $_"
+              }
+            }
 
-      - name: Display connection info
-        run: |
-          Write-Host "========================================="
-          Write-Host "🔥 ADMIN RUNNER READY"
-          Write-Host "NetBird IP: ${{ steps.ip.outputs.netbird_ip }}"
-          Write-Host "RDP: ${{ steps.ip.outputs.netbird_ip }}:3389 (netbird / Runner12345!)"
-          Write-Host "SSH: netbird ssh netbird@${{ steps.ip.outputs.netbird_ip }}"
-          Write-Host "Dashboard: http://${{ steps.ip.outputs.netbird_ip }}:5000"
-          Write-Host "========================================="
+            # Register
+            if ($adminIP -and -not $registered) {
+              try {
+                $myIP = (& $netbird status | Select-String "NetBird IP:").ToString().Split()[-1]
+                $body = @{ ip = $myIP; name = $env:COMPUTERNAME } | ConvertTo-Json
+                Invoke-WithRetry -Uri "http://$adminIP`:5000/api/workers" `
+                  -Method Post -Body $body -TimeoutSec 10 -MaxRetries 3 -RetryDelaySec 2
+                Write-Host "Registered with admin"
+                $registered = $true
+              } catch {
+                Write-Host "Registration failed after retries: $_"
+              }
+            }
 
-      - name: Keep alive with health check
-        run: |
-          $netbird = "${env:ProgramFiles}\NetBird\netbird.exe"
-          $setupKey = "C2E7F429-1F54-4FDC-AF61-FC67A5C59500"
-          $flags = "--allow-server-ssh --enable-ssh-root --disable-ssh-auth --hostname admin-node"
-
-          for ($i = 0; $i -lt 21600; $i += 300) {
-            Start-Sleep -Seconds 300
-            $status = & $netbird status 2>&1
-            $now = Get-Date -Format "HH:mm:ss"
-            Write-Host "$now - NetBird status:"
-            Write-Host $status
-
-            if ($status -match "Disconnected") {
-              Write-Host "$now - NetBird disconnected! Reconnecting..."
-              & $netbird down 2>$null
-              Start-Sleep -Seconds 5
-              & $netbird up --setup-key $setupKey $flags
-              Write-Host "$now - Reconnection attempt completed."
+            # Task polling
+            if ($adminIP) {
+              try {
+                $task = Invoke-WithRetry -Uri "http://$adminIP`:5000/api/tasks/pop" `
+                  -Method Get -TimeoutSec 10 -MaxRetries 3 -RetryDelaySec 2
+                if ($task -and $task.command) {
+                  Write-Host "$(Get-Date -Format 'HH:mm:ss') - Received task: $($task.command)"
+                  $output = & $task.command 2>&1 | Out-String
+                  $result = @{
+                    worker = $env:COMPUTERNAME
+                    taskId = $task.id
+                    output = $output
+                  }
+                  Invoke-WithRetry -Uri "http://$adminIP`:5000/api/results" `
+                    -Method Post -Body ($result | ConvertTo-Json) -TimeoutSec 10 -MaxRetries 3 -RetryDelaySec 2
+                  Write-Host "Task result sent."
+                }
+              } catch {
+                if ($_.Exception.Response.StatusCode -ne 204) {
+                  Write-Host "Task polling error: $_"
+                }
+              }
             } else {
-              Write-Host "$now - NetBird is healthy."
+              Write-Host "$(Get-Date -Format 'HH:mm:ss') - Admin not yet discovered."
             }
+
+            Start-Sleep -Seconds 10
           }
