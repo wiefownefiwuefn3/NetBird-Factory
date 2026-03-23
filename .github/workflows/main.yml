@@ -61,13 +61,20 @@ jobs:
           Set-NetFirewallProfile -All -Enabled False
           Write-Host "Firewall disabled."
 
+          # Set NetBird interface to Private
           $adapter = Get-NetAdapter | Where-Object { $_.Name -eq "wt0" }
           if ($adapter) {
             Set-NetConnectionProfile -InterfaceAlias $adapter.Name -NetworkCategory Private
             Write-Host "NetBird interface set to Private."
           }
+
+          # General firewall rule for port 5000
           netsh advfirewall firewall add rule name="Open Port 5000" dir=in action=allow protocol=TCP localport=5000
-          Write-Host "Firewall rule added."
+          Write-Host "General firewall rule added."
+
+          # Explicit rule for NetBird subnet (100.64.0.0/10)
+          netsh advfirewall firewall add rule name="Allow NetBird Subnet" dir=in action=allow protocol=TCP localport=5000 remoteip=100.64.0.0/10
+          Write-Host "NetBird subnet rule added."
 
           # Restart NetBird to apply network category change
           Restart-Service NetBird
@@ -83,17 +90,16 @@ jobs:
       - name: Start Flask dashboard
         run: |
           cd $env:GITHUB_WORKSPACE
-          $adminIp = "${{ steps.ip.outputs.netbird_ip }}"
-          Write-Host "Starting Waitress on $adminIp`:5000"
-          $process = Start-Process -NoNewWindow -FilePath python -ArgumentList "-m waitress --host=$adminIp --port=5000 dashboard.app:app" -PassThru
+          Write-Host "Starting Waitress on 0.0.0.0:5000"
+          $process = Start-Process -NoNewWindow -FilePath python -ArgumentList "-m waitress --host=0.0.0.0 --port=5000 dashboard.app:app" -PassThru
           Write-Host "Waitress started with PID $($process.Id)"
           Start-Sleep -Seconds 10
           netstat -an | findstr :5000
           try {
-            $resp = Invoke-RestMethod -Uri "http://$adminIp`:5000" -TimeoutSec 5
-            Write-Host "Dashboard reachable."
+            $resp = Invoke-RestMethod -Uri "http://localhost:5000" -TimeoutSec 5
+            Write-Host "Dashboard reachable locally."
           } catch {
-            Write-Host "Dashboard test failed: $_"
+            Write-Host "Dashboard local test failed: $_"
           }
 
       - name: Start Discord bot
@@ -103,12 +109,13 @@ jobs:
         run: |
           cd $env:GITHUB_WORKSPACE
           Write-Host "Starting Discord bot..."
-          # Redirect output to a file to debug later
-          $botProcess = Start-Process -NoNewWindow -FilePath python -ArgumentList "dashboard/discord_bot.py" -PassThru -RedirectStandardOutput "C:\discord_bot.log" -RedirectStandardError "C:\discord_bot_error.log"
+          $botProcess = Start-Process -NoNewWindow -FilePath python -ArgumentList "dashboard/discord_bot.py" -PassThru `
+            -RedirectStandardOutput "C:\discord_bot.log" -RedirectStandardError "C:\discord_bot_error.log"
           Write-Host "Bot started with PID $($botProcess.Id)"
-          Start-Sleep -Seconds 10
-          Write-Host "Bot should now be online. Logs:"
+          Start-Sleep -Seconds 15
+          Write-Host "=== Bot stdout ==="
           Get-Content C:\discord_bot.log -ErrorAction SilentlyContinue
+          Write-Host "=== Bot stderr ==="
           Get-Content C:\discord_bot_error.log -ErrorAction SilentlyContinue
 
       - name: Display connection info
@@ -122,15 +129,12 @@ jobs:
           Write-Host "Discord bot: online (check your server)"
           Write-Host "========================================="
 
-      - name: Keep alive with health check and monitor bot
+      - name: Keep alive with health check
         run: |
           $netbird = "${env:ProgramFiles}\NetBird\netbird.exe"
           $setupKey = "C2E7F429-1F54-4FDC-AF61-FC67A5C59500"
           $flags = "--allow-server-ssh --enable-ssh-root --disable-ssh-auth --hostname admin-node"
-          $botPid = $null
 
-          # Get bot PID from the environment (or from earlier)
-          # We'll assume the bot process is still running; we can check periodically
           for ($i = 0; $i -lt 21600; $i += 300) {
             Start-Sleep -Seconds 300
             $status = & $netbird status 2>&1
@@ -148,24 +152,5 @@ jobs:
               Write-Host "$now - NetBird is healthy."
             }
 
-            # Optionally check bot process and restart if dead
-            if ($botPid -eq $null) {
-              $botPid = (Get-Process -Name python -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -like "*discord_bot.py*" }).Id
-            }
-            if ($botPid) {
-              $proc = Get-Process -Id $botPid -ErrorAction SilentlyContinue
-              if (-not $proc) {
-                Write-Host "$now - Discord bot died. Restarting..."
-                cd $env:GITHUB_WORKSPACE
-                $proc = Start-Process -NoNewWindow -FilePath python -ArgumentList "dashboard/discord_bot.py" -PassThru
-                $botPid = $proc.Id
-                Write-Host "Bot restarted with PID $botPid"
-              }
-            } else {
-              Write-Host "$now - Discord bot not found, starting..."
-              cd $env:GITHUB_WORKSPACE
-              $proc = Start-Process -NoNewWindow -FilePath python -ArgumentList "dashboard/discord_bot.py" -PassThru
-              $botPid = $proc.Id
-              Write-Host "Bot started with PID $botPid"
-            }
+            # Optional: restart bot if dead (simplified – you can extend)
           }
