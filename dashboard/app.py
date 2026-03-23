@@ -14,12 +14,11 @@ TASKS_FILE = os.path.join(DATA_DIR, 'tasks.json')
 RESULTS_FILE = os.path.join(DATA_DIR, 'results.json')
 WORKERS_FILE = os.path.join(DATA_DIR, 'workers.json')
 
-# Lock prevents file corruption when multiple workers ping simultaneously
 db_lock = threading.Lock()
 
 def initialize_files():
     with db_lock:
-        for f in[TASKS_FILE, RESULTS_FILE, WORKERS_FILE]:
+        for f in [TASKS_FILE, RESULTS_FILE, WORKERS_FILE]:
             if not os.path.exists(f) or os.path.getsize(f) == 0:
                 with open(f, 'w') as fp:
                     json.dump([], fp)
@@ -27,7 +26,7 @@ def initialize_files():
 initialize_files()
 
 # ----------------------------------------------------------------------
-# HTML Template – Hardened UI with clean console logs
+# HTML Template
 # ----------------------------------------------------------------------
 HTML_TEMPLATE = '''
 <!DOCTYPE html>
@@ -37,13 +36,11 @@ HTML_TEMPLATE = '''
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>NetBird Fleet Command</title>
     
-    <!-- Fixes favicon 404 Error natively -->
     <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🛸</text></svg>">
     
     <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
-        // Safely mute the Tailwind CDN warning to keep console clean
         const origWarn = console.warn;
         console.warn = function(...args) {
             if (typeof args[0] === 'string' && args[0].includes('cdn.tailwindcss.com')) return;
@@ -87,7 +84,7 @@ HTML_TEMPLATE = '''
             </div>
             <div>
                 <h1 class="text-2xl font-bold text-white tracking-tight">Fleet Command</h1>
-                <p class="text-xs text-gray-400 font-mono mt-1">v2.0.2 // SECURE_UPLINK</p>
+                <p class="text-xs text-gray-400 font-mono mt-1">v2.0.3 // SECURE_UPLINK</p>
             </div>
         </div>
         <div class="flex gap-4 text-sm font-mono text-gray-400">
@@ -177,14 +174,22 @@ HTML_TEMPLATE = '''
                 .replace(/'/g, "&#039;");
         }
 
-        function timeAgo(dateStr) {
+        // Applied User's UTC-matching logic
+        const timeAgo = (dateStr) => {
             if (!dateStr) return "Unknown";
+            const now = new Date();
+            // Get current UTC timestamp in milliseconds
+            const utcNow = Date.UTC(
+                now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(),
+                now.getUTCHours(), now.getUTCMinutes(), now.getUTCSeconds()
+            );
             const then = new Date(dateStr).getTime();
-            const seconds = Math.floor((Date.now() - then) / 1000);
+            const seconds = Math.floor((utcNow - then) / 1000);
+            
             if (seconds < 60) return "Just now";
             if (seconds < 3600) return Math.floor(seconds / 60) + "m ago";
             return Math.floor(seconds / 3600) + "h ago";
-        }
+        };
 
         function showToast(message, type = 'success') {
             const container = document.getElementById('toast-container');
@@ -202,7 +207,6 @@ HTML_TEMPLATE = '''
             }, 3000);
         }
 
-        // Bulletproof JSON fetcher to prevent SyntaxErrors if backend file gets malformed
         async function fetchSafeJSON(url) {
             try {
                 const res = await fetch(url);
@@ -219,7 +223,6 @@ HTML_TEMPLATE = '''
             const results = await fetchSafeJSON('/api/results');
             const workers = await fetchSafeJSON('/api/workers');
 
-            // 1. Render Tasks
             const tasksContainer = document.getElementById('tasksList');
             if (tasks.length === 0) {
                 tasksContainer.innerHTML = '<div class="text-gray-600 italic">Queue is empty.</div>';
@@ -232,7 +235,6 @@ HTML_TEMPLATE = '''
                 `).reverse().join('');
             }
 
-            // 2. Render Results
             const resultsContainer = document.getElementById('resultsList');
             const wasScrolledToBottom = resultsContainer.scrollHeight - resultsContainer.clientHeight <= resultsContainer.scrollTop + 10;
             
@@ -256,17 +258,24 @@ HTML_TEMPLATE = '''
                 resultsContainer.scrollTop = resultsContainer.scrollHeight;
             }
 
-            // 3. Render Workers
             const workersContainer = document.getElementById('workersList');
             document.getElementById('workerCount').innerText = workers.length;
             
             if (workers.length === 0) {
                 workersContainer.innerHTML = '<div class="text-gray-500 italic text-sm">No nodes connected.</div>';
             } else {
-                const now = Date.now();
+                // Apply User's exact UTC mapping for calculating Online/Offline status
+                const now = new Date();
+                const utcNow = Date.UTC(
+                    now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(),
+                    now.getUTCHours(), now.getUTCMinutes(), now.getUTCSeconds()
+                );
+
                 workersContainer.innerHTML = workers.map(w => {
                     const lastSeenMs = w.lastSeen ? new Date(w.lastSeen).getTime() : 0;
-                    const isOnline = ((now - lastSeenMs) / 60000) < 5;
+                    // Check if node pinged in the last 5 minutes (300,000 ms) using matched UTC logic
+                    const isOnline = ((utcNow - lastSeenMs) / 60000) < 5;
+                    
                     return `
                     <div class="bg-gray-800/40 border border-gray-700 p-3 rounded-lg flex items-center justify-between hover:bg-gray-800 transition-colors">
                         <div class="flex flex-col">
@@ -292,7 +301,6 @@ HTML_TEMPLATE = '''
         setInterval(updateData, 3000);
         updateData();
 
-        // Execution logic
         const cmdInput = document.getElementById('commandInput');
         const sendBtn = document.getElementById('sendBtn');
         const historyDiv = document.getElementById('commandHistory');
