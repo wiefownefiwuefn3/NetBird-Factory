@@ -61,11 +61,28 @@ jobs:
           Set-NetFirewallProfile -All -Enabled False
           Write-Host "Firewall disabled – dashboard will be reachable"
 
-      - name: Allow inbound port 5000 (extra safety)
+      # CRITICAL FIX: Set NetBird interface to Private and add explicit rule for port 5000
+      - name: Configure NetBird interface and firewall
         run: |
-          New-NetFirewallRule -DisplayName "Allow Flask Dashboard" `
-            -Direction Inbound -Protocol TCP -LocalPort 5000 -Action Allow -Profile Any
-          Write-Host "Firewall rule added for port 5000"
+          # NetBird interface is named "wt0" (confirmed by user)
+          $adapter = Get-NetAdapter | Where-Object { $_.Name -eq "wt0" }
+          if ($adapter) {
+            Write-Host "Found NetBird adapter: $($adapter.Name)"
+            Set-NetConnectionProfile -InterfaceAlias $adapter.Name -NetworkCategory Private
+            Write-Host "Network category set to Private."
+          } else {
+            Write-Host "wt0 not found; trying wildcard."
+            $adapter = Get-NetAdapter | Where-Object { $_.Name -like "*NetBird*" -or $_.Name -like "*WireGuard*" } | Select-Object -First 1
+            if ($adapter) {
+              Set-NetConnectionProfile -InterfaceAlias $adapter.Name -NetworkCategory Private
+              Write-Host "Network category set to Private for $($adapter.Name)."
+            } else {
+              Write-Host "NetBird adapter not found – skipping."
+            }
+          }
+          # Add firewall rule using netsh (persistent, works even with firewall disabled)
+          netsh advfirewall firewall add rule name="Open Port 5000" dir=in action=allow protocol=TCP localport=5000
+          Write-Host "Firewall rule added for port 5000."
 
       - name: Install Python, Flask, Waitress, and start dashboard
         run: |
@@ -80,12 +97,12 @@ jobs:
           Write-Host "Waitress started with PID $($process.Id)"
           Start-Sleep -Seconds 10
           netstat -an | findstr :5000
-          # Test from NetBird IP
+          # Test via NetBird IP
           try {
             $resp = Invoke-RestMethod -Uri "http://$adminIp`:5000" -TimeoutSec 5
             Write-Host "Dashboard is reachable via NetBird IP."
           } catch {
-            Write-Host "Dashboard local test via NetBird IP failed: $_"
+            Write-Host "Dashboard test via NetBird IP failed: $_"
           }
 
       - name: Verify dashboard reachability
