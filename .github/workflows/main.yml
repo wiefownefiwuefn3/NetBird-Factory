@@ -75,11 +75,11 @@ jobs:
           $process = Start-Process -FilePath python -ArgumentList $scriptPath `
             -RedirectStandardOutput $stdoutLog -RedirectStandardError $stderrLog `
             -WindowStyle Hidden -PassThru
-          $pid = $process.Id
-          Write-Host "Flask process started with PID $pid"
+          $flaskPid = $process.Id
+          Write-Host "Flask process started with PID $flaskPid"
 
           Start-Sleep -Seconds 10
-          $stillRunning = Get-Process -Id $pid -ErrorAction SilentlyContinue
+          $stillRunning = Get-Process -Id $flaskPid -ErrorAction SilentlyContinue
           if ($stillRunning) {
             Write-Host "Flask process is still running."
           } else {
