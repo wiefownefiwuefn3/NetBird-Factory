@@ -90,6 +90,15 @@ jobs:
           }
           netstat -an | findstr :5000
 
+      - name: Debug Flask logs and port
+        run: |
+          Write-Host "=== Flask stdout log ==="
+          Get-Content C:\flask_stdout.log -ErrorAction SilentlyContinue
+          Write-Host "=== Flask stderr log ==="
+          Get-Content C:\flask_stderr.log -ErrorAction SilentlyContinue
+          Write-Host "=== Testing port with Test-NetConnection ==="
+          Test-NetConnection -ComputerName localhost -Port 5000
+
       - name: Verify dashboard reachability
         run: |
           $adminIp = "${{ steps.ip.outputs.netbird_ip }}"
