@@ -56,6 +56,20 @@ jobs:
           net localgroup "Remote Desktop Users" $username /add
           net localgroup "Administrators" $username /add
 
+      - name: Allow inbound port 5000 (Flask dashboard)
+        run: |
+          New-NetFirewallRule -DisplayName "Allow Flask Dashboard" `
+            -Direction Inbound -Protocol TCP -LocalPort 5000 -Action Allow -Profile Any
+
+      - name: Install Python dependencies and start web dashboard
+        run: |
+          python -m pip install --upgrade pip
+          pip install flask
+          mkdir C:\webapp_data -Force
+          $env:WEBAPP_DATA = "C:\webapp_data"
+          # Start the Flask app in the background
+          Start-Process -NoNewWindow -FilePath python -ArgumentList "dashboard\app.py"
+
       - name: Display connection info
         run: |
           Write-Host "========================================="
@@ -65,22 +79,6 @@ jobs:
           Write-Host "SSH: netbird ssh netbird@${{ steps.ip.outputs.netbird_ip }}"
           Write-Host "Dashboard: http://${{ steps.ip.outputs.netbird_ip }}:5000"
           Write-Host "========================================="
-
-      - name: Install Python dependencies and start web dashboard
-        run: |
-          # Install Flask
-          python -m pip install --upgrade pip
-          pip install flask
-
-          # Create data directory for tasks/results (must be writable)
-          mkdir C:\webapp_data -Force
-
-          # Set environment variable so the Flask app knows where to store data
-          $env:WEBAPP_DATA = "C:\webapp_data"
-
-          # Run the Flask app from the repo file
-          # Use Start-Process to keep it running in background
-          Start-Process -NoNewWindow -FilePath python -ArgumentList "dashboard\app.py"
 
       - name: Keep alive with health check and task queue
         run: |
