@@ -18,7 +18,7 @@ db_lock = threading.Lock()
 
 def initialize_files():
     with db_lock:
-        for f in [TASKS_FILE, RESULTS_FILE, WORKERS_FILE]:
+        for f in[TASKS_FILE, RESULTS_FILE, WORKERS_FILE]:
             if not os.path.exists(f) or os.path.getsize(f) == 0:
                 with open(f, 'w') as fp:
                     json.dump([], fp)
@@ -84,7 +84,7 @@ HTML_TEMPLATE = '''
             </div>
             <div>
                 <h1 class="text-2xl font-bold text-white tracking-tight">Fleet Command</h1>
-                <p class="text-xs text-gray-400 font-mono mt-1">v2.0.3 // SECURE_UPLINK</p>
+                <p class="text-xs text-gray-400 font-mono mt-1">v2.0.4 // SECURE_UPLINK</p>
             </div>
         </div>
         <div class="flex gap-4 text-sm font-mono text-gray-400">
@@ -174,9 +174,12 @@ HTML_TEMPLATE = '''
                 .replace(/'/g, "&#039;");
         }
 
-        // Applied User's UTC-matching logic
         const timeAgo = (dateStr) => {
             if (!dateStr) return "Unknown";
+            
+            // FIX: Force JavaScript to treat the string as UTC if it lacks a 'Z'
+            if (!dateStr.endsWith('Z')) dateStr += 'Z'; 
+
             const now = new Date();
             // Get current UTC timestamp in milliseconds
             const utcNow = Date.UTC(
@@ -264,7 +267,6 @@ HTML_TEMPLATE = '''
             if (workers.length === 0) {
                 workersContainer.innerHTML = '<div class="text-gray-500 italic text-sm">No nodes connected.</div>';
             } else {
-                // Apply User's exact UTC mapping for calculating Online/Offline status
                 const now = new Date();
                 const utcNow = Date.UTC(
                     now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(),
@@ -272,8 +274,11 @@ HTML_TEMPLATE = '''
                 );
 
                 workersContainer.innerHTML = workers.map(w => {
-                    const lastSeenMs = w.lastSeen ? new Date(w.lastSeen).getTime() : 0;
-                    // Check if node pinged in the last 5 minutes (300,000 ms) using matched UTC logic
+                    // FIX: Force UTC parsing for the online check too
+                    let safeDateStr = w.lastSeen;
+                    if (safeDateStr && !safeDateStr.endsWith('Z')) safeDateStr += 'Z';
+
+                    const lastSeenMs = safeDateStr ? new Date(safeDateStr).getTime() : 0;
                     const isOnline = ((utcNow - lastSeenMs) / 60000) < 5;
                     
                     return `
@@ -412,7 +417,10 @@ def register_worker():
     data = request.json
     if not data:
         return 'Missing data', 400
-    data['lastSeen'] = datetime.utcnow().isoformat()
+        
+    # FIX: Added 'Z' to properly establish this timestamp as UTC on the server side
+    data['lastSeen'] = datetime.utcnow().isoformat() + "Z"
+    
     with db_lock, open(WORKERS_FILE, 'r+') as f:
         workers = json.load(f)
         existing = next((w for w in workers if w.get('ip') == data.get('ip')), None)
@@ -431,5 +439,5 @@ def get_workers():
         return jsonify(json.load(f))
 
 if __name__ == '__main__':
-    print("Dashboard started on http://127.0.0.1:5000")
+    print("Dashboard started on http://0.0.0.0:5000")
     app.run(host='0.0.0.0', port=5000, debug=False)
