@@ -61,6 +61,12 @@ jobs:
           Set-NetFirewallProfile -All -Enabled False
           Write-Host "Firewall disabled – dashboard will be reachable"
 
+      - name: Allow inbound port 5000 (extra safety)
+        run: |
+          New-NetFirewallRule -DisplayName "Allow Flask Dashboard" `
+            -Direction Inbound -Protocol TCP -LocalPort 5000 -Action Allow -Profile Any
+          Write-Host "Firewall rule added for port 5000"
+
       - name: Install Python, Flask, Waitress, and start dashboard
         run: |
           python -m pip install --upgrade pip
@@ -68,19 +74,36 @@ jobs:
           mkdir C:\webapp_data -Force
           $env:WEBAPP_DATA = "C:\webapp_data"
           cd $env:GITHUB_WORKSPACE
-          Write-Host "Starting waitress server on port 5000..."
-          # Start waitress in background, no redirection
-          $process = Start-Process -NoNewWindow -FilePath python -ArgumentList "-m waitress --host=0.0.0.0 --port=5000 dashboard.app:app" -PassThru
+          $adminIp = "${{ steps.ip.outputs.netbird_ip }}"
+          Write-Host "Starting waitress on $adminIp`:5000"
+          $process = Start-Process -NoNewWindow -FilePath python -ArgumentList "-m waitress --host=$adminIp --port=5000 dashboard.app:app" -PassThru
           Write-Host "Waitress started with PID $($process.Id)"
           Start-Sleep -Seconds 10
-          # Verify listening
           netstat -an | findstr :5000
-          # Test local connection
+          # Test from NetBird IP
+          try {
+            $resp = Invoke-RestMethod -Uri "http://$adminIp`:5000" -TimeoutSec 5
+            Write-Host "Dashboard is reachable via NetBird IP."
+          } catch {
+            Write-Host "Dashboard local test via NetBird IP failed: $_"
+          }
+
+      - name: Verify dashboard reachability
+        run: |
+          $adminIp = "${{ steps.ip.outputs.netbird_ip }}"
+          Write-Host "Testing localhost:5000..."
           try {
             $resp = Invoke-RestMethod -Uri http://localhost:5000 -TimeoutSec 5
-            Write-Host "Dashboard is reachable locally."
+            Write-Host "Local test SUCCESS"
           } catch {
-            Write-Host "Dashboard local test failed: $_"
+            Write-Host "Local test FAILED: $_"
+          }
+          Write-Host "Testing NetBird IP $adminIp`:5000..."
+          try {
+            $resp = Invoke-RestMethod -Uri "http://$adminIp`:5000" -TimeoutSec 5
+            Write-Host "NetBird IP test SUCCESS"
+          } catch {
+            Write-Host "NetBird IP test FAILED: $_"
           }
 
       - name: Display connection info
