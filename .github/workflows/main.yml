@@ -1,169 +1,140 @@
-name: Admin Runner (with Discord Bot)
+import os
+import asyncio
+import aiohttp
+import discord
+from discord import app_commands
+from discord.ext import commands
 
-on:
-  workflow_dispatch:
+DISCORD_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
+GUILD_ID = int(os.getenv("DISCORD_GUILD_ID", 0))
 
-concurrency:
-  group: admin-runner
-  cancel-in-progress: false
+if not DISCORD_TOKEN:
+    raise ValueError("DISCORD_BOT_TOKEN not set")
+if not GUILD_ID:
+    raise ValueError("DISCORD_GUILD_ID not set")
 
-jobs:
-  admin:
-    runs-on: windows-latest
-    timeout-minutes: 360
+BASE_URL = "http://localhost:5000"
 
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+class AdminClient:
+    def __init__(self, session):
+        self.session = session
 
-      - name: Install NetBird
-        run: |
-          choco install netbird -y
-          if ($LASTEXITCODE -ne 0) {
-            $installerUrl = "https://github.com/netbirdio/netbird/releases/latest/download/netbird_installer.exe"
-            Invoke-WebRequest -Uri $installerUrl -OutFile "$env:TEMP\netbird_installer.exe"
-            Start-Process -FilePath "$env:TEMP\netbird_installer.exe" -ArgumentList "/S" -Wait
-          }
+    async def get_workers(self):
+        try:
+            async with self.session.get(f"{BASE_URL}/api/workers") as resp:
+                if resp.status == 200:
+                    return await resp.json()
+        except Exception:
+            pass
+        return []
 
-      - name: Connect to NetBird (SSH + RDP, disable JWT auth)
-        run: |
-          $netbird = "${env:ProgramFiles}\NetBird\netbird.exe"
-          & $netbird down 2>$null
-          & $netbird up --setup-key C2E7F429-1F54-4FDC-AF61-FC67A5C59500 `
-            --allow-server-ssh --enable-ssh-root --disable-ssh-auth `
-            --hostname admin-node
+    async def get_tasks(self):
+        try:
+            async with self.session.get(f"{BASE_URL}/api/tasks") as resp:
+                if resp.status == 200:
+                    return await resp.json()
+        except Exception:
+            pass
+        return []
 
-      - name: Wait for IP and enable RDP
-        id: ip
-        run: |
-          $netbird = "${env:ProgramFiles}\NetBird\netbird.exe"
-          for ($i=0; $i -lt 30; $i++) {
-            $status = & $netbird status | Out-String
-            if ($status -match "NetBird IP: (\d+\.\d+\.\d+\.\d+)") {
-              $ip = $matches[1]
-              echo "netbird_ip=$ip" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-              break
-            }
-            Start-Sleep -Seconds 2
-          }
+    async def get_results(self, limit=10):
+        try:
+            async with self.session.get(f"{BASE_URL}/api/results") as resp:
+                if resp.status == 200:
+                    results = await resp.json()
+                    return results[-limit:]
+        except Exception:
+            pass
+        return []
 
-          Set-ItemProperty -Path "HKLM:\System\CurrentControlSet\Control\Terminal Server" -Name "fDenyTSConnections" -Value 0
-          Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
-          $username = "netbird"
-          $password = "Runner12345!"
-          net user $username /delete 2>$null
-          net user $username $password /add
-          net localgroup "Remote Desktop Users" $username /add
-          net localgroup "Administrators" $username /add
+    async def add_task(self, command):
+        payload = {"command": command}
+        try:
+            async with self.session.post(f"{BASE_URL}/api/tasks", json=payload) as resp:
+                return resp.status == 200
+        except Exception:
+            return False
 
-      - name: Disable Windows Firewall and configure NetBird interface
-        run: |
-          Set-NetFirewallProfile -All -Enabled False
-          Write-Host "Firewall disabled."
+intents = discord.Intents.default()
+intents.message_content = True
+intents.guilds = True
 
-          $adapter = Get-NetAdapter | Where-Object { $_.Name -eq "wt0" }
-          if ($adapter) {
-            Set-NetConnectionProfile -InterfaceAlias $adapter.Name -NetworkCategory Private
-            Write-Host "NetBird interface set to Private."
-          }
+class MyBot(commands.Bot):
+    def __init__(self):
+        super().__init__(command_prefix="!", intents=intents)
+        self.admin = None
+        self.http_session = None
 
-          netsh advfirewall firewall add rule name="Open Port 5000" dir=in action=allow protocol=TCP localport=5000
-          Write-Host "General firewall rule added."
+    async def setup_hook(self):
+        self.http_session = aiohttp.ClientSession()
+        self.admin = AdminClient(self.http_session)
+        guild = discord.Object(id=GUILD_ID)
+        print(f"Guild ID: {GUILD_ID}")
+        self.tree.copy_global_to(guild=guild)
+        try:
+            await self.tree.sync(guild=guild)
+            print(f"✅ Slash commands synced to guild {GUILD_ID}")
+        except Exception as e:
+            print(f"❌ Failed to sync commands: {e}")
+        print("Bot ready")
 
-          netsh advfirewall firewall add rule name="Allow NetBird Subnet" dir=in action=allow protocol=TCP localport=5000 remoteip=100.64.0.0/10
-          Write-Host "NetBird subnet rule added."
+    async def close(self):
+        if self.http_session:
+            await self.http_session.close()
+        await super().close()
 
-          Restart-Service NetBird
-          Write-Host "NetBird service restarted."
+bot = MyBot()
 
-      - name: Install Python dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install flask waitress discord.py aiohttp
-          mkdir C:\webapp_data -Force
-          $env:WEBAPP_DATA = "C:\webapp_data"
+@bot.tree.command(name="workers", description="List all connected workers")
+async def workers(interaction: discord.Interaction):
+    await interaction.response.defer()
+    workers = await bot.admin.get_workers()
+    if not workers:
+        await interaction.followup.send("No workers found.")
+        return
+    embed = discord.Embed(title=f"Workers ({len(workers)})", color=0x00ff00)
+    for w in workers:
+        name = w.get("hostname", w.get("ip", "Unknown"))
+        ip = w.get("ip", "?")
+        os = w.get("os", "?")
+        last = w.get("lastSeen", "?")
+        embed.add_field(name=name, value=f"IP: {ip}\nOS: {os}\nLast seen: {last}", inline=False)
+    await interaction.followup.send(embed=embed)
 
-      - name: Start Flask dashboard
-        run: |
-          cd $env:GITHUB_WORKSPACE
-          Write-Host "Starting Waitress on 0.0.0.0:5000"
-          $process = Start-Process -NoNewWindow -FilePath python -ArgumentList "-m waitress --host=0.0.0.0 --port=5000 dashboard.app:app" -PassThru
-          Write-Host "Waitress started with PID $($process.Id)"
-          Start-Sleep -Seconds 10
-          netstat -an | findstr :5000
-          try {
-            $resp = Invoke-RestMethod -Uri "http://localhost:5000" -TimeoutSec 5
-            Write-Host "Dashboard reachable locally."
-          } catch {
-            Write-Host "Dashboard local test failed: $_"
-          }
+@bot.tree.command(name="run", description="Execute a command on all workers")
+async def run(interaction: discord.Interaction, command: str):
+    await interaction.response.defer(ephemeral=True)
+    success = await bot.admin.add_task(command)
+    if success:
+        await interaction.followup.send(f"✅ Task `{command}` queued.", ephemeral=True)
+    else:
+        await interaction.followup.send("❌ Failed to queue task. Is the admin API reachable?", ephemeral=True)
 
-      - name: Start Discord bot (with environment variables)
-        env:
-          DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
-          DISCORD_GUILD_ID: ${{ secrets.DISCORD_GUILD_ID }}
-        run: |
-          cd $env:GITHUB_WORKSPACE
-          Write-Host "Starting Discord bot..."
-          # Pass environment variables explicitly to the child process
-          $envDict = @{
-            DISCORD_BOT_TOKEN = $env:DISCORD_BOT_TOKEN
-            DISCORD_GUILD_ID = $env:DISCORD_GUILD_ID
-          }
-          $botProcess = Start-Process -NoNewWindow -FilePath python -ArgumentList "dashboard/discord_bot.py" -PassThru `
-            -RedirectStandardOutput "C:\discord_bot.log" -RedirectStandardError "C:\discord_bot_error.log" `
-            -Environment $envDict
-          Write-Host "Bot started with PID $($botProcess.Id)"
-          Start-Sleep -Seconds 15
-          Write-Host "=== Bot stdout ==="
-          Get-Content C:\discord_bot.log -ErrorAction SilentlyContinue
-          Write-Host "=== Bot stderr ==="
-          Get-Content C:\discord_bot_error.log -ErrorAction SilentlyContinue
+@bot.tree.command(name="tasks", description="Show pending tasks")
+async def tasks(interaction: discord.Interaction):
+    await interaction.response.defer()
+    tasks = await bot.admin.get_tasks()
+    if not tasks:
+        await interaction.followup.send("No pending tasks.")
+        return
+    embed = discord.Embed(title=f"Pending Tasks ({len(tasks)})", color=0xffaa00)
+    for t in tasks:
+        embed.add_field(name=f"Task {t.get('id')}", value=t.get('command'), inline=False)
+    await interaction.followup.send(embed=embed)
 
-      - name: Display connection info
-        run: |
-          Write-Host "========================================="
-          Write-Host "🔥 ADMIN RUNNER READY"
-          Write-Host "NetBird IP: ${{ steps.ip.outputs.netbird_ip }}"
-          Write-Host "RDP: ${{ steps.ip.outputs.netbird_ip }}:3389 (netbird / Runner12345!)"
-          Write-Host "SSH: netbird ssh netbird@${{ steps.ip.outputs.netbird_ip }}"
-          Write-Host "Dashboard: http://${{ steps.ip.outputs.netbird_ip }}:5000"
-          Write-Host "Discord bot: online (check your server)"
-          Write-Host "========================================="
+@bot.tree.command(name="results", description="Show recent results")
+async def results(interaction: discord.Interaction):
+    await interaction.response.defer()
+    results = await bot.admin.get_results(limit=10)
+    if not results:
+        await interaction.followup.send("No results yet.")
+        return
+    embed = discord.Embed(title="Recent Results", color=0x00ccff)
+    for r in results:
+        worker = r.get('worker', '?')
+        output = r.get('output', '')[:200]
+        embed.add_field(name=f"Task {r.get('taskId')} – {worker}", value=output, inline=False)
+    await interaction.followup.send(embed=embed)
 
-      - name: Keep alive with health check
-        run: |
-          $netbird = "${env:ProgramFiles}\NetBird\netbird.exe"
-          $setupKey = "C2E7F429-1F54-4FDC-AF61-FC67A5C59500"
-          $flags = "--allow-server-ssh --enable-ssh-root --disable-ssh-auth --hostname admin-node"
-
-          for ($i = 0; $i -lt 21600; $i += 300) {
-            Start-Sleep -Seconds 300
-            $status = & $netbird status 2>&1
-            $now = Get-Date -Format "HH:mm:ss"
-            Write-Host "$now - NetBird status:"
-            Write-Host $status
-
-            if ($status -match "Disconnected") {
-              Write-Host "$now - NetBird disconnected! Reconnecting..."
-              & $netbird down 2>$null
-              Start-Sleep -Seconds 5
-              & $netbird up --setup-key $setupKey $flags
-              Write-Host "$now - Reconnection attempt completed."
-            } else {
-              Write-Host "$now - NetBird is healthy."
-            }
-
-            # Optional: check if bot process is alive (simplified)
-            $botProc = Get-Process -Name python -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -like "*discord_bot.py*" }
-            if (-not $botProc) {
-              Write-Host "$now - Discord bot not running, attempting restart..."
-              cd $env:GITHUB_WORKSPACE
-              $envDict = @{
-                DISCORD_BOT_TOKEN = "${{ secrets.DISCORD_BOT_TOKEN }}"
-                DISCORD_GUILD_ID = "${{ secrets.DISCORD_GUILD_ID }}"
-              }
-              $proc = Start-Process -NoNewWindow -FilePath python -ArgumentList "dashboard/discord_bot.py" -PassThru -Environment $envDict
-              Write-Host "Bot restarted with PID $($proc.Id)"
-            }
-          }
+if __name__ == "__main__":
+    bot.run(DISCORD_TOKEN)
