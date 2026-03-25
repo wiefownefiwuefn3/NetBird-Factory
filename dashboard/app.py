@@ -30,205 +30,153 @@ initialize_files()
 # ----------------------------------------------------------------------
 HTML_TEMPLATE = '''
 <!DOCTYPE html>
-<html lang="en" class="dark">
+<html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>NetBird | Fleet Command</title>
+    <title>Fleet Command Console</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500&family=Inter:wght@300;400;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Fira+Code:wght@400;500&display=swap" rel="stylesheet">
     <script>
         tailwind.config = {
-            darkMode: 'class',
             theme: {
                 extend: {
-                    colors: {
-                        gray: { 850: '#181c25', 900: '#11141b', 950: '#0a0d12' },
-                        emerald: { 400: '#34d399', 500: '#10b981', 600: '#059669' }
-                    },
-                    fontFamily: { sans: ['Inter', 'sans-serif'], mono: ['Fira Code', 'monospace'] }
+                    fontFamily: { sans: ['Inter', 'sans-serif'], mono: ['Fira Code', 'monospace'] },
+                    colors: { zinc: { 950: '#09090b' } }
                 }
             }
         }
     </script>
     <script src="https://unpkg.com/lucide@latest"></script>
     <style>
-        body { background-color: #0a0d12; scrollbar-gutter: stable; }
-        ::-webkit-scrollbar { width: 5px; height: 5px; }
-        ::-webkit-scrollbar-track { background: #0f1219; }
-        ::-webkit-scrollbar-thumb { background: #374151; border-radius: 10px; }
-        ::-webkit-scrollbar-thumb:hover { background: #10b981; }
-        
-        .terminal-bg { background: radial-gradient(circle at top left, #111827, #030712); }
-        .node-card { transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1); }
-        .node-card.active-target { border-color: #10b981; box-shadow: 0 0 15px rgba(16, 185, 129, 0.15); background: #111827; }
-        .glow-text { text-shadow: 0 0 10px rgba(16, 185, 129, 0.5); }
-        
-        @keyframes pulse-border {
-            0% { border-color: rgba(16, 185, 129, 0.2); }
-            50% { border-color: rgba(16, 185, 129, 0.6); }
-            100% { border-color: rgba(16, 185, 129, 0.2); }
-        }
-        .pulse-emerald { animation: pulse-border 2s infinite; }
+        body { background-color: #09090b; color: #e4e4e7; }
+        .custom-scroll::-webkit-scrollbar { width: 4px; }
+        .custom-scroll::-webkit-scrollbar-thumb { background: #3f3f46; border-radius: 10px; }
+        .node-card.selected { border-color: #10b981; background: rgba(16, 185, 129, 0.05); }
+        .terminal-line:hover { background: rgba(255,255,255,0.03); }
     </style>
 </head>
-<body class="text-gray-300 font-sans h-screen overflow-hidden flex flex-col">
+<body class="h-screen flex flex-col overflow-hidden font-sans">
 
-    <!-- Toast Notifications -->
-    <div id="toast-container" class="fixed top-6 right-6 z-50 flex flex-col gap-3"></div>
-
-    <!-- Top Navigation Bar -->
-    <nav class="h-16 border-b border-gray-800 bg-gray-900/50 backdrop-blur-md flex items-center justify-between px-6 shrink-0">
-        <div class="flex items-center gap-4">
-            <div class="flex items-center gap-2">
-                <div class="bg-emerald-500 p-1.5 rounded-lg shadow-[0_0_15px_rgba(16,185,129,0.4)]">
-                    <i data-lucide="shield-check" class="w-5 h-5 text-gray-950"></i>
-                </div>
-                <span class="font-bold text-xl tracking-tight text-white">NETBIRD <span class="text-emerald-500 font-light">FLEET</span></span>
-            </div>
-            <div class="h-6 w-px bg-gray-800 mx-2"></div>
-            <div class="flex gap-6 text-[11px] font-mono uppercase tracking-widest text-gray-500">
-                <div class="flex items-center gap-2">
-                    <span class="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
-                    <span>System: <span class="text-emerald-400">Operational</span></span>
-                </div>
-                <div class="flex items-center gap-2">
-                    <i data-lucide="cpu" class="w-3 h-3"></i>
-                    <span>Nodes: <span id="stat-total" class="text-white">0</span></span>
-                </div>
-            </div>
-        </div>
-        
+    <!-- Header -->
+    <header class="h-14 border-b border-zinc-800 flex items-center justify-between px-6 bg-zinc-900/50">
         <div class="flex items-center gap-3">
-            <div id="connection-timer" class="text-[11px] font-mono text-gray-500 border border-gray-800 px-3 py-1 rounded-full bg-black/20">
-                POLLING: 3.0s
-            </div>
+            <div class="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></div>
+            <h1 class="text-sm font-bold tracking-widest uppercase text-zinc-400">Fleet Command <span class="text-zinc-600 font-normal ml-2">v2.1</span></h1>
         </div>
-    </nav>
+        <div class="flex items-center gap-6">
+            <div class="text-[11px] font-mono text-zinc-500"><span id="active-count">0</span> NODES ACTIVE</div>
+            <div class="h-4 w-px bg-zinc-800"></div>
+            <div class="text-[11px] font-mono text-zinc-500">POLLING: 3S</div>
+        </div>
+    </header>
 
-    <main class="flex flex-1 overflow-hidden">
-        <!-- Sidebar: Node Management -->
-        <aside class="w-80 border-r border-gray-800 bg-gray-900/30 flex flex-col">
-            <div class="p-4 border-b border-gray-800">
-                <div class="relative group">
-                    <i data-lucide="search" class="w-4 h-4 absolute left-3 top-3 text-gray-600 group-focus-within:text-emerald-500 transition-colors"></i>
-                    <input type="text" id="nodeSearch" placeholder="Filter nodes..." 
-                        class="w-full bg-gray-950 border border-gray-800 rounded-lg pl-10 pr-4 py-2 text-sm focus:outline-none focus:border-emerald-500 transition-all">
-                </div>
+    <div class="flex flex-1 overflow-hidden">
+        
+        <!-- Left Pane: The Fleet -->
+        <aside class="w-72 border-r border-zinc-800 flex flex-col bg-zinc-950">
+            <div class="p-4 border-b border-zinc-800">
+                <h2 class="text-[10px] font-bold text-zinc-500 uppercase tracking-wider mb-3">Live Agents (5m window)</h2>
+                <button id="broadcastBtn" onclick="selectTarget('all')" class="w-full py-2 px-3 rounded-md bg-zinc-800 hover:bg-zinc-700 text-xs font-semibold flex items-center justify-center gap-2 transition-all">
+                    <i data-lucide="radio" class="w-3.5 h-3.5"></i> Broadcast to All
+                </button>
             </div>
-            
-            <div class="flex-1 overflow-y-auto p-4 space-y-3" id="workersList">
-                <!-- Nodes populated by JS -->
-                <div class="flex items-center justify-center h-20 text-gray-600 text-sm italic">
-                    Initializing node discovery...
-                </div>
-            </div>
-
-            <div class="p-4 bg-gray-900/50 border-t border-gray-800">
-                <div class="flex items-center justify-between mb-2">
-                    <span class="text-[10px] uppercase font-bold text-gray-500 tracking-wider">Active Target</span>
-                    <button id="resetTarget" class="text-[10px] text-emerald-500 hover:text-emerald-400 font-mono">RESET</button>
-                </div>
-                <div class="bg-gray-950 border border-emerald-500/30 rounded-md p-2 flex items-center gap-2">
-                    <i data-lucide="target" class="w-4 h-4 text-emerald-500"></i>
-                    <span id="currentTarget" class="font-mono text-sm text-emerald-400">all_broadcast</span>
-                </div>
+            <div id="workersList" class="flex-1 overflow-y-auto custom-scroll p-2 space-y-1">
+                <!-- Workers go here -->
+                <div class="p-4 text-center text-xs text-zinc-600 italic">Searching for agents...</div>
             </div>
         </aside>
 
-        <!-- Main Content: Terminal & Execution -->
-        <section class="flex-1 flex flex-col min-w-0 bg-gray-950">
-            <!-- Command Input Area -->
-            <div class="p-6 pb-0">
-                <div class="relative flex items-center">
-                    <div class="absolute left-4 text-emerald-500 font-mono font-bold select-none">#</div>
-                    <input type="text" id="commandInput" placeholder="Enter shell command or payload..." 
-                        class="w-full bg-gray-900 border border-gray-800 rounded-xl pl-10 pr-32 py-4 text-gray-100 font-mono shadow-2xl focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 transition-all">
-                    <button id="sendBtn" class="absolute right-2 bg-emerald-600 hover:bg-emerald-500 text-white px-6 py-2 rounded-lg font-bold transition-all flex items-center gap-2 group">
-                        <span>EXECUTE</span>
-                        <i data-lucide="zap" class="w-4 h-4 group-hover:scale-125 transition-transform"></i>
-                    </button>
-                </div>
+        <!-- Center Pane: Command & Execution -->
+        <main class="flex-1 flex flex-col bg-zinc-900/20">
+            <div class="p-8 max-w-4xl mx-auto w-full flex-1 flex flex-col">
                 
-                <!-- Command Chips -->
-                <div id="commandHistory" class="flex gap-2 mt-3 overflow-x-auto pb-2">
-                    <!-- History Chips populated by JS -->
+                <!-- Target Indicator -->
+                <div class="mb-6 flex items-center gap-3">
+                    <span class="text-xs font-medium text-zinc-500">Targeting:</span>
+                    <span id="targetBadge" class="px-3 py-1 rounded-full bg-emerald-500/10 text-emerald-500 text-xs font-bold border border-emerald-500/20 shadow-sm">
+                        ALL_BROADCAST
+                    </span>
                 </div>
-            </div>
 
-            <!-- Terminal Window -->
-            <div class="flex-1 flex flex-col p-6 pt-4 min-h-0">
-                <div class="flex-1 terminal-bg border border-gray-800 rounded-xl overflow-hidden flex flex-col shadow-inner">
-                    <!-- Terminal Header -->
-                    <div class="bg-gray-900/80 px-4 py-2 border-b border-gray-800 flex justify-between items-center">
-                        <div class="flex items-center gap-2">
-                            <div class="flex gap-1.5">
-                                <div class="w-2.5 h-2.5 rounded-full bg-red-500/20 border border-red-500/40"></div>
-                                <div class="w-2.5 h-2.5 rounded-full bg-yellow-500/20 border border-yellow-500/40"></div>
-                                <div class="w-2.5 h-2.5 rounded-full bg-emerald-500/20 border border-emerald-500/40"></div>
-                            </div>
-                            <span class="ml-2 text-[11px] font-mono text-gray-500 uppercase tracking-widest">Live Output Telemetry</span>
-                        </div>
-                        <div class="flex items-center gap-4">
-                            <button onclick="document.getElementById('resultsList').innerHTML=''" class="text-gray-500 hover:text-white transition-colors">
-                                <i data-lucide="trash-2" class="w-4 h-4"></i>
-                            </button>
-                        </div>
-                    </div>
-
-                    <!-- Output Area -->
-                    <div id="resultsList" class="flex-1 overflow-y-auto p-6 font-mono text-sm space-y-4 scroll-smooth">
-                        <div class="text-gray-600 italic">No output received. Awaiting payload execution...</div>
+                <!-- Input Box -->
+                <div class="relative group mb-8">
+                    <div class="absolute -inset-1 bg-gradient-to-r from-emerald-500/20 to-blue-500/20 rounded-xl blur opacity-25 group-focus-within:opacity-100 transition duration-1000"></div>
+                    <div class="relative flex items-center bg-zinc-900 border border-zinc-700 rounded-xl overflow-hidden focus-within:border-zinc-500 transition-all">
+                        <div class="pl-4 text-zinc-500 font-mono italic select-none">$</div>
+                        <input type="text" id="commandInput" placeholder="Enter shell command..." 
+                            class="w-full bg-transparent px-4 py-5 text-zinc-100 font-mono focus:outline-none">
+                        <button id="sendBtn" class="mr-3 bg-emerald-600 hover:bg-emerald-500 text-white px-5 py-2 rounded-lg font-bold text-sm transition-all flex items-center gap-2">
+                            Deploy <i data-lucide="send" class="w-4 h-4"></i>
+                        </button>
                     </div>
                 </div>
 
-                <!-- Pending Queue -->
-                <div class="mt-4 bg-gray-900/30 border border-gray-800 rounded-lg p-3">
-                    <div class="flex items-center gap-2 mb-2">
-                        <i data-lucide="layers" class="w-3 h-3 text-gray-500"></i>
-                        <span class="text-[10px] uppercase font-bold text-gray-500 tracking-wider">Pending Task Queue</span>
+                <!-- History -->
+                <div class="mb-8">
+                    <h3 class="text-[10px] font-bold text-zinc-500 uppercase tracking-wider mb-3 flex items-center gap-2">
+                        <i data-lucide="history" class="w-3 h-3"></i> Quick Redploy
+                    </h3>
+                    <div id="commandHistory" class="flex flex-wrap gap-2">
+                        <!-- History items -->
                     </div>
-                    <div id="tasksList" class="flex gap-3 overflow-x-auto pb-1">
-                        <span class="text-xs text-gray-700 italic">Queue clear.</span>
+                </div>
+
+                <!-- Pending Tasks -->
+                <div class="flex-1 min-h-0 flex flex-col">
+                    <h3 class="text-[10px] font-bold text-zinc-500 uppercase tracking-wider mb-3">Deployment Queue</h3>
+                    <div id="tasksList" class="bg-zinc-950/50 border border-zinc-800 rounded-lg p-4 font-mono text-xs text-zinc-500 overflow-y-auto custom-scroll">
+                        No pending tasks in queue.
                     </div>
                 </div>
             </div>
-        </section>
-    </main>
+        </main>
+
+        <!-- Right Pane: Telemetry -->
+        <aside class="w-96 border-l border-zinc-800 bg-zinc-950 flex flex-col">
+            <div class="p-4 border-b border-zinc-800 flex justify-between items-center bg-zinc-900/30">
+                <h2 class="text-[10px] font-bold text-zinc-500 uppercase tracking-wider">Telemetry Feed</h2>
+                <button onclick="document.getElementById('resultsList').innerHTML=''" class="text-zinc-600 hover:text-zinc-400">
+                    <i data-lucide="eraser" class="w-3.5 h-3.5"></i>
+                </button>
+            </div>
+            <div id="resultsList" class="flex-1 overflow-y-auto custom-scroll p-4 font-mono text-[11px] space-y-4">
+                <div class="text-zinc-700 italic">Waiting for incoming data...</div>
+            </div>
+        </aside>
+
+    </div>
+
+    <!-- Toast Container -->
+    <div id="toast-container" class="fixed bottom-6 right-6 z-50 flex flex-col gap-2"></div>
 
     <script>
         lucide.createIcons();
         let selectedTarget = 'all';
-        let history = [];
-        let workerSearchTerm = '';
+        let commandHistory = [];
 
         const escapeHTML = (str) => {
             if (!str) return '';
             return str.toString().replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;");
         };
 
-        const timeAgo = (dateStr) => {
-            const now = new Date();
-            const then = new Date(dateStr).getTime();
-            const seconds = Math.floor((now.getTime() - then) / 1000);
-            if (seconds < 60) return "just now";
-            if (seconds < 3600) return Math.floor(seconds / 60) + "m ago";
-            return Math.floor(seconds / 3600) + "h ago";
+        const showToast = (msg) => {
+            const container = document.getElementById('toast-container');
+            const div = document.createElement('div');
+            div.className = "bg-zinc-800 border border-zinc-700 text-zinc-200 px-4 py-3 rounded-lg shadow-xl text-xs font-medium animate-bounce";
+            div.innerText = msg;
+            container.appendChild(div);
+            setTimeout(() => div.remove(), 3000);
         };
 
-        const showToast = (message, type = 'success') => {
-            const container = document.getElementById('toast-container');
-            const toast = document.createElement('div');
-            const colorClass = type === 'success' ? 'border-emerald-500 text-emerald-400' : 'border-red-500 text-red-400';
-            toast.className = `px-4 py-3 bg-gray-900 border-l-4 shadow-2xl rounded-r-lg font-mono text-xs flex items-center gap-3 animate-slide-in transition-all duration-300 translate-x-full`;
-            toast.innerHTML = `<i data-lucide="${type === 'success' ? 'check-circle' : 'alert-triangle'}" class="w-4 h-4"></i> ${message}`;
-            container.appendChild(toast);
-            lucide.createIcons();
-            setTimeout(() => { toast.classList.remove('translate-x-full'); }, 10);
-            setTimeout(() => {
-                toast.classList.add('opacity-0', 'translate-x-full');
-                setTimeout(() => toast.remove(), 300);
-            }, 4000);
+        const selectTarget = (target) => {
+            selectedTarget = target;
+            const badge = document.getElementById('targetBadge');
+            badge.innerText = target === 'all' ? 'ALL_BROADCAST' : target;
+            badge.className = target === 'all' 
+                ? "px-3 py-1 rounded-full bg-emerald-500/10 text-emerald-500 text-xs font-bold border border-emerald-500/20"
+                : "px-3 py-1 rounded-full bg-blue-500/10 text-blue-500 text-xs font-bold border border-blue-500/20";
+            updateData();
         };
 
         async function updateData() {
@@ -240,144 +188,92 @@ HTML_TEMPLATE = '''
                 const results = await resultsRes.json();
                 const workers = await workersRes.json();
 
-                // Stats
-                document.getElementById('stat-total').innerText = workers.length;
+                // Logic: Remove agents older than 5 minutes (300,000 ms)
+                const now = new Date().getTime();
+                const activeWorkers = workers.filter(w => {
+                    const lastSeen = new Date(w.lastSeen).getTime();
+                    return (now - lastSeen) < 300000; 
+                });
 
-                // Tasks
-                const tasksContainer = document.getElementById('tasksList');
-                if (tasks.length === 0) {
-                    tasksContainer.innerHTML = '<span class="text-xs text-gray-700 italic">Queue clear.</span>';
+                document.getElementById('active-count').innerText = activeWorkers.length;
+
+                // Update Workers List
+                const wList = document.getElementById('workersList');
+                if (activeWorkers.length === 0) {
+                    wList.innerHTML = '<div class="p-4 text-center text-[10px] text-zinc-600 italic">No active agents online.</div>';
                 } else {
-                    tasksContainer.innerHTML = tasks.map(t => `
-                        <div class="bg-gray-800 border border-gray-700 px-3 py-1 rounded-full flex items-center gap-2 shrink-0">
-                            <span class="text-[10px] text-emerald-500 font-bold">#${t.id}</span>
-                            <span class="text-xs text-gray-300 font-mono">${escapeHTML(t.command.substring(0,20))}${t.command.length > 20 ? '...' : ''}</span>
+                    wList.innerHTML = activeWorkers.map(w => `
+                        <div onclick="selectTarget('${w.ip}')" class="node-card group p-3 rounded-lg border border-zinc-800 hover:border-zinc-600 cursor-pointer transition-all ${selectedTarget === w.ip ? 'selected' : ''}">
+                            <div class="flex items-center justify-between">
+                                <span class="text-xs font-bold truncate ${selectedTarget === w.ip ? 'text-emerald-400' : 'text-zinc-300'}">${escapeHTML(w.hostname || w.ip)}</span>
+                                <div class="w-1.5 h-1.5 rounded-full bg-emerald-500 shadow-[0_0_5px_rgba(16,185,129,0.5)]"></div>
+                            </div>
+                            <div class="mt-1 flex justify-between items-center">
+                                <span class="text-[10px] text-zinc-600 font-mono">${w.ip}</span>
+                                <span class="text-[9px] text-zinc-500 uppercase">${escapeHTML(w.os || 'Linux')}</span>
+                            </div>
                         </div>
                     `).join('');
                 }
 
-                // Results (Terminal)
-                const resultsContainer = document.getElementById('resultsList');
-                const wasScrolled = resultsContainer.scrollHeight - resultsContainer.clientHeight <= resultsContainer.scrollTop + 50;
-                
+                // Update Tasks Queue
+                const tList = document.getElementById('tasksList');
+                tList.innerHTML = tasks.length === 0 
+                    ? 'No pending tasks in queue.' 
+                    : tasks.map(t => `<div class="mb-1 border-b border-zinc-900 pb-1 text-zinc-400"><span class="text-emerald-700">#${t.id}</span> ${escapeHTML(t.command)} <span class="text-zinc-700">[Target: ${t.target}]</span></div>`).join('');
+
+                // Update Telemetry (Right Pane)
+                const rList = document.getElementById('resultsList');
                 if (results.length > 0) {
-                    resultsContainer.innerHTML = results.map(r => {
-                        const output = r.output || r.result || JSON.stringify(r);
-                        return `
-                        <div class="group border-b border-gray-800/50 pb-4 last:border-0">
-                            <div class="flex items-center gap-3 mb-2">
-                                <span class="bg-emerald-500/10 text-emerald-500 px-2 py-0.5 rounded text-[10px] font-bold border border-emerald-500/20">NODE: ${escapeHTML(r.worker || r.ip || 'unknown')}</span>
-                                <span class="text-gray-600 text-[10px] font-mono">Task ID: ${r.id || 'N/A'}</span>
+                    rList.innerHTML = results.slice(-20).reverse().map(r => `
+                        <div class="terminal-line border-l border-zinc-800 pl-3 py-1">
+                            <div class="text-[9px] text-zinc-600 mb-1 flex justify-between">
+                                <span>FROM: ${escapeHTML(r.worker || r.ip)}</span>
+                                <span>TASK: ${r.id}</span>
                             </div>
-                            <pre class="text-gray-400 overflow-x-auto whitespace-pre-wrap leading-relaxed">${escapeHTML(output)}</pre>
+                            <div class="text-zinc-300 break-words whitespace-pre-wrap">${escapeHTML(r.output || r.result)}</div>
                         </div>
-                    `}).reverse().join('');
+                    `).join('');
                 }
 
-                if (wasScrolled) resultsContainer.scrollTop = resultsContainer.scrollHeight;
-
-                // Workers
-                const workersContainer = document.getElementById('workersList');
-                const filteredWorkers = workers.filter(w => 
-                    (w.hostname || w.ip || '').toLowerCase().includes(workerSearchTerm.toLowerCase())
-                );
-
-                if (filteredWorkers.length === 0) {
-                    workersContainer.innerHTML = `<div class="text-center py-10 text-gray-600 text-xs">No nodes matching "${workerSearchTerm}"</div>`;
-                } else {
-                    workersContainer.innerHTML = filteredWorkers.map(w => {
-                        const isOnline = ((new Date().getTime() - new Date(w.lastSeen).getTime()) / 60000) < 5;
-                        const isSelected = selectedTarget === w.ip;
-                        return `
-                        <div onclick="selectWorker('${w.ip}')" class="node-card p-3 rounded-xl border border-gray-800 cursor-pointer hover:border-gray-600 ${isSelected ? 'active-target border-emerald-500' : 'bg-gray-900/20'}">
-                            <div class="flex justify-between items-start">
-                                <div class="flex items-center gap-2">
-                                    <i data-lucide="server" class="w-4 h-4 ${isOnline ? 'text-emerald-500' : 'text-gray-600'}"></i>
-                                    <span class="text-sm font-semibold text-gray-200">${escapeHTML(w.hostname || 'Unknown Node')}</span>
-                                </div>
-                                <span class="w-2 h-2 rounded-full ${isOnline ? 'bg-emerald-500 shadow-[0_0_8px_#10b981]' : 'bg-red-500'}"></span>
-                            </div>
-                            <div class="mt-2 flex justify-between items-end">
-                                <div class="text-[10px] font-mono text-gray-500">
-                                    <div>IP: ${escapeHTML(w.ip)}</div>
-                                    <div class="uppercase">${escapeHTML(w.os || 'Linux')}</div>
-                                </div>
-                                <div class="text-[9px] text-gray-600 font-mono">${timeAgo(w.lastSeen)}</div>
-                            </div>
-                        </div>
-                    `}).join('');
-                    lucide.createIcons();
-                }
-
-            } catch (err) { console.error("Poll Error:", err); }
+                lucide.createIcons();
+            } catch (err) { console.error("Update error", err); }
         }
 
-        window.selectWorker = (ip) => {
-            selectedTarget = ip;
-            document.getElementById('currentTarget').innerText = ip;
-            updateData();
-        };
-
-        document.getElementById('nodeSearch').addEventListener('input', (e) => {
-            workerSearchTerm = e.target.value;
-            updateData();
-        });
-
-        document.getElementById('resetTarget').onclick = () => {
-            selectedTarget = 'all';
-            document.getElementById('currentTarget').innerText = 'all_broadcast';
-            updateData();
-        };
-
-        const cmdInput = document.getElementById('commandInput');
-        const sendBtn = document.getElementById('sendBtn');
-
-        const executeCommand = async () => {
+        const execute = async () => {
+            const cmdInput = document.getElementById('commandInput');
             const cmd = cmdInput.value.trim();
-            if (!cmd) return;
-            
-            sendBtn.disabled = true;
-            sendBtn.innerHTML = `<i data-lucide="loader-2" class="w-4 h-4 animate-spin"></i>`;
-            lucide.createIcons();
+            if(!cmd) return;
 
-            try {
-                const res = await fetch('/api/tasks', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({command: cmd, target: selectedTarget})
-                });
+            const res = await fetch('/api/tasks', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({command: cmd, target: selectedTarget})
+            });
 
-                if(res.ok) {
-                    showToast(`Payload deployed to ${selectedTarget}`, 'success');
-                    if (!history.includes(cmd)) {
-                        history.unshift(cmd);
-                        if (history.length > 5) history.pop();
-                        renderHistory();
-                    }
-                    cmdInput.value = '';
-                } else {
-                    showToast('Execution failed', 'error');
+            if(res.ok) {
+                showToast(`Task deployed to ${selectedTarget}`);
+                if (!commandHistory.includes(cmd)) {
+                    commandHistory.unshift(cmd);
+                    if(commandHistory.length > 6) commandHistory.pop();
+                    renderHistory();
                 }
-            } catch (e) { showToast('Network unreachable', 'error'); }
-
-            sendBtn.disabled = false;
-            sendBtn.innerHTML = `<span>EXECUTE</span><i data-lucide="zap" class="w-4 h-4"></i>`;
-            lucide.createIcons();
-            updateData();
+                cmdInput.value = '';
+                updateData();
+            }
         };
 
         const renderHistory = () => {
-            const container = document.getElementById('commandHistory');
-            container.innerHTML = history.map(c => `
+            document.getElementById('commandHistory').innerHTML = commandHistory.map(c => `
                 <button onclick="document.getElementById('commandInput').value='${escapeHTML(c)}'" 
-                    class="bg-gray-900 border border-gray-800 hover:border-emerald-500/50 px-3 py-1 rounded text-[10px] font-mono text-gray-500 whitespace-nowrap transition-colors">
+                    class="px-3 py-1.5 rounded-md bg-zinc-800/50 border border-zinc-700 text-[11px] text-zinc-400 hover:text-white hover:border-zinc-500 transition-all font-mono">
                     ${escapeHTML(c)}
                 </button>
             `).join('');
         };
 
-        sendBtn.onclick = executeCommand;
-        cmdInput.onkeypress = (e) => { if (e.key === 'Enter') executeCommand(); };
+        document.getElementById('sendBtn').onclick = execute;
+        document.getElementById('commandInput').onkeypress = (e) => { if(e.key === 'Enter') execute(); };
 
         setInterval(updateData, 3000);
         updateData();
