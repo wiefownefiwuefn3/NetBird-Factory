@@ -1,182 +1,214 @@
 import json
 import os
-import threading
 from datetime import datetime
 from flask import Flask, request, jsonify, render_template_string
 
 # ----------------------------------------------------------------------
-# Data directory & Thread-Safe Locking
+# Data directory – persistent for the run
 # ----------------------------------------------------------------------
 DATA_DIR = os.environ.get('WEBAPP_DATA', 'webapp_data')
 os.makedirs(DATA_DIR, exist_ok=True)
 
-TASKS_FILE = os.path.join(DATA_DIR, 'tasks.json')
+TASKS_DIR = os.path.join(DATA_DIR, 'tasks')
+os.makedirs(TASKS_DIR, exist_ok=True)
+
 RESULTS_FILE = os.path.join(DATA_DIR, 'results.json')
 WORKERS_FILE = os.path.join(DATA_DIR, 'workers.json')
 
-db_lock = threading.Lock()
+# Ensure files exist
+for f in [RESULTS_FILE, WORKERS_FILE]:
+    if not os.path.exists(f):
+        with open(f, 'w') as fp:
+            json.dump([], fp)
 
-def initialize_files():
-    with db_lock:
-        for f in[TASKS_FILE, RESULTS_FILE, WORKERS_FILE]:
-            if not os.path.exists(f) or os.path.getsize(f) == 0:
-                with open(f, 'w') as fp:
-                    json.dump([], fp)
+# Helper: get path to a worker’s task file
+def worker_tasks_file(worker_ip):
+    # sanitize IP (replace dots with underscores)
+    safe_ip = worker_ip.replace('.', '_')
+    return os.path.join(TASKS_DIR, f'tasks_{safe_ip}.json')
 
-initialize_files()
+def ensure_worker_tasks_file(worker_ip):
+    path = worker_tasks_file(worker_ip)
+    if not os.path.exists(path):
+        with open(path, 'w') as f:
+            json.dump([], f)
+    return path
 
 # ----------------------------------------------------------------------
-# HTML Template
+# HTML Template (unchanged from previous version)
 # ----------------------------------------------------------------------
 HTML_TEMPLATE = '''
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" class="dark">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Fleet Command Console</title>
+    <title>NetBird Fleet Command</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Fira+Code:wght@400;500&display=swap" rel="stylesheet">
     <script>
         tailwind.config = {
+            darkMode: 'class',
             theme: {
                 extend: {
-                    fontFamily: { sans: ['Inter', 'sans-serif'], mono: ['Fira Code', 'monospace'] },
-                    colors: { zinc: { 950: '#09090b' } }
+                    colors: {
+                        gray: { 850: '#1f2937', 900: '#111827', 950: '#030712' },
+                        emerald: { 400: '#34d399', 500: '#10b981', 600: '#059669' }
+                    },
+                    fontFamily: {
+                        sans:['Inter', 'system-ui', 'sans-serif'],
+                        mono: ['Fira Code', 'ui-monospace', 'monospace']
+                    }
                 }
             }
         }
     </script>
     <script src="https://unpkg.com/lucide@latest"></script>
     <style>
-        body { background-color: #09090b; color: #e4e4e7; }
-        .custom-scroll::-webkit-scrollbar { width: 4px; }
-        .custom-scroll::-webkit-scrollbar-thumb { background: #3f3f46; border-radius: 10px; }
-        .node-card.selected { border-color: #10b981; background: rgba(16, 185, 129, 0.05); }
-        .terminal-line:hover { background: rgba(255,255,255,0.03); }
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: #374151; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #4b5563; }
+        .glass-panel {
+            background: rgba(17, 24, 39, 0.7);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(55, 65, 81, 0.5);
+        }
     </style>
 </head>
-<body class="h-screen flex flex-col overflow-hidden font-sans">
+<body class="bg-gray-950 text-gray-200 font-sans min-h-screen flex flex-col p-4 md:p-8">
 
-    <!-- Header -->
-    <header class="h-14 border-b border-zinc-800 flex items-center justify-between px-6 bg-zinc-900/50">
+    <div id="toast-container" class="fixed bottom-5 right-5 z-50 flex flex-col gap-2"></div>
+
+    <header class="flex items-center justify-between mb-8 pb-4 border-b border-gray-800">
         <div class="flex items-center gap-3">
-            <div class="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></div>
-            <h1 class="text-sm font-bold tracking-widest uppercase text-zinc-400">Fleet Command <span class="text-zinc-600 font-normal ml-2">v2.1</span></h1>
+            <div class="p-2 bg-emerald-500/10 rounded-lg border border-emerald-500/20">
+                <i data-lucide="satellite" class="w-6 h-6 text-emerald-400"></i>
+            </div>
+            <div>
+                <h1 class="text-2xl font-bold text-white tracking-tight">Fleet Command</h1>
+                <p class="text-xs text-gray-400 font-mono mt-1">v2.1 // Per‑worker queues</p>
+            </div>
         </div>
-        <div class="flex items-center gap-6">
-            <div class="text-[11px] font-mono text-zinc-500"><span id="active-count">0</span> NODES ACTIVE</div>
-            <div class="h-4 w-px bg-zinc-800"></div>
-            <div class="text-[11px] font-mono text-zinc-500">POLLING: 3S</div>
+        <div class="flex gap-4 text-sm font-mono text-gray-400">
+            <div class="flex items-center gap-2"><span class="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span> SYSTEM ONLINE</div>
         </div>
     </header>
 
-    <div class="flex flex-1 overflow-hidden">
+    <div class="grid grid-cols-1 lg:grid-cols-12 gap-6 flex-grow">
         
-        <!-- Left Pane: The Fleet -->
-        <aside class="w-72 border-r border-zinc-800 flex flex-col bg-zinc-950">
-            <div class="p-4 border-b border-zinc-800">
-                <h2 class="text-[10px] font-bold text-zinc-500 uppercase tracking-wider mb-3">Live Agents (5m window)</h2>
-                <button id="broadcastBtn" onclick="selectTarget('all')" class="w-full py-2 px-3 rounded-md bg-zinc-800 hover:bg-zinc-700 text-xs font-semibold flex items-center justify-center gap-2 transition-all">
-                    <i data-lucide="radio" class="w-3.5 h-3.5"></i> Broadcast to All
-                </button>
-            </div>
-            <div id="workersList" class="flex-1 overflow-y-auto custom-scroll p-2 space-y-1">
-                <!-- Workers go here -->
-                <div class="p-4 text-center text-xs text-zinc-600 italic">Searching for agents...</div>
-            </div>
-        </aside>
-
-        <!-- Center Pane: Command & Execution -->
-        <main class="flex-1 flex flex-col bg-zinc-900/20">
-            <div class="p-8 max-w-4xl mx-auto w-full flex-1 flex flex-col">
-                
-                <!-- Target Indicator -->
-                <div class="mb-6 flex items-center gap-3">
-                    <span class="text-xs font-medium text-zinc-500">Targeting:</span>
-                    <span id="targetBadge" class="px-3 py-1 rounded-full bg-emerald-500/10 text-emerald-500 text-xs font-bold border border-emerald-500/20 shadow-sm">
-                        ALL_BROADCAST
-                    </span>
+        <div class="lg:col-span-5 flex flex-col gap-6">
+            <div class="glass-panel rounded-xl p-5 shadow-xl">
+                <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-4 flex items-center gap-2">
+                    <i data-lucide="terminal-square" class="w-4 h-4"></i> Execute Payload
+                </h2>
+                <div class="flex bg-gray-900 border border-gray-700 rounded-lg overflow-hidden focus-within:border-emerald-500 transition-colors">
+                    <span class="px-3 py-3 text-emerald-500 font-mono border-r border-gray-700 bg-gray-800/50">>_</span>
+                    <input type="text" id="commandInput" placeholder="powershell command..." 
+                        class="w-full bg-transparent text-gray-100 font-mono px-3 py-2 outline-none placeholder-gray-600" autocomplete="off" autofocus>
+                    <button id="sendBtn" class="bg-emerald-600 hover:bg-emerald-500 text-white px-4 font-semibold transition-colors flex items-center gap-2">
+                        Deploy <i data-lucide="send" class="w-4 h-4"></i>
+                    </button>
                 </div>
-
-                <!-- Input Box -->
-                <div class="relative group mb-8">
-                    <div class="absolute -inset-1 bg-gradient-to-r from-emerald-500/20 to-blue-500/20 rounded-xl blur opacity-25 group-focus-within:opacity-100 transition duration-1000"></div>
-                    <div class="relative flex items-center bg-zinc-900 border border-zinc-700 rounded-xl overflow-hidden focus-within:border-zinc-500 transition-all">
-                        <div class="pl-4 text-zinc-500 font-mono italic select-none">$</div>
-                        <input type="text" id="commandInput" placeholder="Enter shell command..." 
-                            class="w-full bg-transparent px-4 py-5 text-zinc-100 font-mono focus:outline-none">
-                        <button id="sendBtn" class="mr-3 bg-emerald-600 hover:bg-emerald-500 text-white px-5 py-2 rounded-lg font-bold text-sm transition-all flex items-center gap-2">
-                            Deploy <i data-lucide="send" class="w-4 h-4"></i>
-                        </button>
-                    </div>
-                </div>
-
-                <!-- History -->
-                <div class="mb-8">
-                    <h3 class="text-[10px] font-bold text-zinc-500 uppercase tracking-wider mb-3 flex items-center gap-2">
-                        <i data-lucide="history" class="w-3 h-3"></i> Quick Redploy
-                    </h3>
-                    <div id="commandHistory" class="flex flex-wrap gap-2">
-                        <!-- History items -->
-                    </div>
-                </div>
-
-                <!-- Pending Tasks -->
-                <div class="flex-1 min-h-0 flex flex-col">
-                    <h3 class="text-[10px] font-bold text-zinc-500 uppercase tracking-wider mb-3">Deployment Queue</h3>
-                    <div id="tasksList" class="bg-zinc-950/50 border border-zinc-800 rounded-lg p-4 font-mono text-xs text-zinc-500 overflow-y-auto custom-scroll">
-                        No pending tasks in queue.
+                <div class="mt-4">
+                    <h3 class="text-xs text-gray-500 font-mono mb-2">RECENT COMMANDS</h3>
+                    <div id="commandHistory" class="flex flex-col gap-1.5 font-mono text-xs">
+                        <div class="text-gray-600 italic">No commands sent in this session.</div>
                     </div>
                 </div>
             </div>
-        </main>
 
-        <!-- Right Pane: Telemetry -->
-        <aside class="w-96 border-l border-zinc-800 bg-zinc-950 flex flex-col">
-            <div class="p-4 border-b border-zinc-800 flex justify-between items-center bg-zinc-900/30">
-                <h2 class="text-[10px] font-bold text-zinc-500 uppercase tracking-wider">Telemetry Feed</h2>
-                <button onclick="document.getElementById('resultsList').innerHTML=''" class="text-zinc-600 hover:text-zinc-400">
-                    <i data-lucide="eraser" class="w-3.5 h-3.5"></i>
-                </button>
+            <div class="glass-panel rounded-xl p-5 shadow-xl flex-grow">
+                <div class="flex justify-between items-center mb-4">
+                    <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wider flex items-center gap-2">
+                        <i data-lucide="network" class="w-4 h-4"></i> Active Nodes
+                    </h2>
+                    <span id="workerCount" class="bg-gray-800 text-xs px-2 py-1 rounded-md border border-gray-700">0</span>
+                </div>
+                <div id="workersList" class="flex flex-col gap-3 max-h-[400px] overflow-y-auto pr-2">
+                    <div class="animate-pulse flex gap-3 items-center">
+                        <div class="w-8 h-8 bg-gray-800 rounded-full"></div>
+                        <div class="flex-1 space-y-2">
+                            <div class="h-3 bg-gray-800 rounded w-3/4"></div>
+                            <div class="h-2 bg-gray-800 rounded w-1/2"></div>
+                        </div>
+                    </div>
+                </div>
+                <div class="mt-2 text-xs text-gray-500 flex justify-between items-center">
+                    <span>🎯 Target: <span id="currentTarget" class="font-mono text-emerald-400">all</span></span>
+                    <button id="resetTarget" class="text-gray-500 hover:text-gray-300">Reset to broadcast</button>
+                </div>
             </div>
-            <div id="resultsList" class="flex-1 overflow-y-auto custom-scroll p-4 font-mono text-[11px] space-y-4">
-                <div class="text-zinc-700 italic">Waiting for incoming data...</div>
-            </div>
-        </aside>
+        </div>
 
+        <div class="lg:col-span-7 flex flex-col gap-6">
+            <div class="glass-panel rounded-xl p-5 shadow-xl">
+                <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-4 flex items-center gap-2">
+                    <i data-lucide="list-todo" class="w-4 h-4"></i> Pending Queue
+                </h2>
+                <div id="tasksList" class="space-y-2 font-mono text-sm max-h-[150px] overflow-y-auto">
+                    <div class="text-gray-500 italic">Queue is currently empty.</div>
+                </div>
+            </div>
+
+            <div class="glass-panel rounded-xl p-0 shadow-xl flex flex-col flex-grow border border-gray-700 overflow-hidden">
+                <div class="bg-gray-800/80 border-b border-gray-700 px-4 py-2 flex justify-between items-center">
+                    <h2 class="text-sm font-semibold text-gray-300 flex items-center gap-2">
+                        <i data-lucide="activity" class="w-4 h-4"></i> Live Telemetry
+                    </h2>
+                    <div class="flex gap-2">
+                        <div class="w-3 h-3 rounded-full bg-gray-600"></div>
+                        <div class="w-3 h-3 rounded-full bg-gray-600"></div>
+                        <div class="w-3 h-3 rounded-full bg-gray-600"></div>
+                    </div>
+                </div>
+                <div id="resultsList" class="p-4 bg-[#0a0f18] text-gray-300 font-mono text-sm overflow-y-auto flex-grow max-h-[500px] space-y-4">
+                    <div class="text-gray-600">Awaiting telemetry data...</div>
+                </div>
+            </div>
+        </div>
     </div>
-
-    <!-- Toast Container -->
-    <div id="toast-container" class="fixed bottom-6 right-6 z-50 flex flex-col gap-2"></div>
 
     <script>
         lucide.createIcons();
+        let history = [];
         let selectedTarget = 'all';
-        let commandHistory = [];
 
         const escapeHTML = (str) => {
             if (!str) return '';
-            return str.toString().replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;");
+            return str.toString()
+                .replace(/&/g, "&amp;")
+                .replace(/</g, "&lt;")
+                .replace(/>/g, "&gt;")
+                .replace(/"/g, "&quot;")
+                .replace(/'/g, "&#039;");
         };
 
-        const showToast = (msg) => {
+        const timeAgo = (dateStr) => {
+            const now = new Date();
+            const utcNow = Date.UTC(
+                now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(),
+                now.getUTCHours(), now.getUTCMinutes(), now.getUTCSeconds()
+            );
+            const then = new Date(dateStr).getTime();
+            const seconds = Math.floor((utcNow - then) / 1000);
+            if (seconds < 60) return "Just now";
+            if (seconds < 3600) return Math.floor(seconds / 60) + "m ago";
+            return Math.floor(seconds / 3600) + "h ago";
+        };
+
+        const showToast = (message, type = 'success') => {
             const container = document.getElementById('toast-container');
-            const div = document.createElement('div');
-            div.className = "bg-zinc-800 border border-zinc-700 text-zinc-200 px-4 py-3 rounded-lg shadow-xl text-xs font-medium animate-bounce";
-            div.innerText = msg;
-            container.appendChild(div);
-            setTimeout(() => div.remove(), 3000);
-        };
-
-        const selectTarget = (target) => {
-            selectedTarget = target;
-            const badge = document.getElementById('targetBadge');
-            badge.innerText = target === 'all' ? 'ALL_BROADCAST' : target;
-            badge.className = target === 'all' 
-                ? "px-3 py-1 rounded-full bg-emerald-500/10 text-emerald-500 text-xs font-bold border border-emerald-500/20"
-                : "px-3 py-1 rounded-full bg-blue-500/10 text-blue-500 text-xs font-bold border border-blue-500/20";
-            updateData();
+            const toast = document.createElement('div');
+            const bg = type === 'success' ? 'bg-emerald-500/20 border-emerald-500/50 text-emerald-400' : 'bg-red-500/20 border-red-500/50 text-red-400';
+            toast.className = `px-4 py-3 rounded-lg border ${bg} backdrop-blur-md shadow-lg font-mono text-sm flex items-center gap-2 transition-all duration-300 translate-y-10 opacity-0`;
+            toast.innerHTML = `<i data-lucide="${type === 'success' ? 'check-circle' : 'alert-circle'}" class="w-4 h-4"></i> ${message}`;
+            container.appendChild(toast);
+            lucide.createIcons();
+            setTimeout(() => { toast.classList.remove('translate-y-10', 'opacity-0'); }, 10);
+            setTimeout(() => {
+                toast.classList.add('opacity-0');
+                setTimeout(() => toast.remove(), 300);
+            }, 3000);
         };
 
         async function updateData() {
@@ -188,130 +220,209 @@ HTML_TEMPLATE = '''
                 const results = await resultsRes.json();
                 const workers = await workersRes.json();
 
-                // Logic: Remove agents older than 5 minutes (300,000 ms)
-                const now = new Date().getTime();
-                const activeWorkers = workers.filter(w => {
-                    const lastSeen = new Date(w.lastSeen).getTime();
-                    return (now - lastSeen) < 300000; 
-                });
-
-                document.getElementById('active-count').innerText = activeWorkers.length;
-
-                // Update Workers List
-                const wList = document.getElementById('workersList');
-                if (activeWorkers.length === 0) {
-                    wList.innerHTML = '<div class="p-4 text-center text-[10px] text-zinc-600 italic">No active agents online.</div>';
+                const tasksContainer = document.getElementById('tasksList');
+                if (tasks.length === 0) {
+                    tasksContainer.innerHTML = '<div class="text-gray-600 italic">Queue is empty.</div>';
                 } else {
-                    wList.innerHTML = activeWorkers.map(w => `
-                        <div onclick="selectTarget('${w.ip}')" class="node-card group p-3 rounded-lg border border-zinc-800 hover:border-zinc-600 cursor-pointer transition-all ${selectedTarget === w.ip ? 'selected' : ''}">
-                            <div class="flex items-center justify-between">
-                                <span class="text-xs font-bold truncate ${selectedTarget === w.ip ? 'text-emerald-400' : 'text-zinc-300'}">${escapeHTML(w.hostname || w.ip)}</span>
-                                <div class="w-1.5 h-1.5 rounded-full bg-emerald-500 shadow-[0_0_5px_rgba(16,185,129,0.5)]"></div>
+                    tasksContainer.innerHTML = tasks.map(t => `
+                        <div class="flex items-center gap-3 bg-gray-800/50 p-2 rounded border border-gray-700/50">
+                            <span class="text-emerald-500 font-bold min-w-[30px]">#${t.id}</span>
+                            <span class="text-gray-300 truncate">${escapeHTML(t.command)}</span>
+                            <span class="text-xs text-gray-500 ml-auto">target: ${escapeHTML(t.target)}</span>
+                        </div>
+                    `).reverse().join('');
+                }
+
+                const resultsContainer = document.getElementById('resultsList');
+                const wasScrolledToBottom = resultsContainer.scrollHeight - resultsContainer.clientHeight <= resultsContainer.scrollTop + 10;
+                if (results.length === 0) {
+                    resultsContainer.innerHTML = '<div class="text-gray-600">Awaiting telemetry data...</div>';
+                } else {
+                    resultsContainer.innerHTML = results.map(r => {
+                        const output = r.output || r.result || JSON.stringify(r);
+                        return `
+                        <div class="border-l-2 border-emerald-500/30 pl-3 mb-4">
+                            <div class="flex justify-between items-center mb-1 text-xs">
+                                <span class="text-emerald-400 font-bold">Node: ${escapeHTML(r.worker || r.ip || r.hostname || 'Unknown')}</span>
+                                <span class="text-gray-500">Task #${escapeHTML(r.id || '?')}</span>
                             </div>
-                            <div class="mt-1 flex justify-between items-center">
-                                <span class="text-[10px] text-zinc-600 font-mono">${w.ip}</span>
-                                <span class="text-[9px] text-zinc-500 uppercase">${escapeHTML(w.os || 'Linux')}</span>
+                            <div class="text-gray-300 whitespace-pre-wrap break-all">${escapeHTML(output)}</div>
+                        </div>
+                    `}).reverse().join('');
+                }
+                if (wasScrolledToBottom) resultsContainer.scrollTop = resultsContainer.scrollHeight;
+
+                const workersContainer = document.getElementById('workersList');
+                document.getElementById('workerCount').innerText = workers.length;
+                if (workers.length === 0) {
+                    workersContainer.innerHTML = '<div class="text-gray-500 italic text-sm">No nodes connected.</div>';
+                } else {
+                    workersContainer.innerHTML = workers.map(w => {
+                        const lastSeenDate = new Date(w.lastSeen);
+                        const isOnline = ((new Date().getTime() - lastSeenDate.getTime()) / 60000) < 5;
+                        return `
+                        <div class="worker-card bg-gray-800/40 border border-gray-700 p-3 rounded-lg flex items-center justify-between hover:bg-gray-800 transition-colors cursor-pointer" data-ip="${escapeHTML(w.ip)}">
+                            <div class="flex flex-col">
+                                <span class="font-bold text-gray-200 text-sm flex items-center gap-2">
+                                    <i data-lucide="server" class="w-3 h-3 text-gray-400"></i> 
+                                    ${escapeHTML(w.hostname || w.name || w.ip || 'Unknown Node')}
+                                </span>
+                                <span class="text-xs text-gray-500 mt-1">${escapeHTML(w.ip)} • ${escapeHTML(w.os || 'N/A')}</span>
+                            </div>
+                            <div class="flex flex-col items-end">
+                                <span class="flex items-center gap-1.5 text-xs ${isOnline ? 'text-emerald-400' : 'text-red-400'}">
+                                    <span class="w-2 h-2 rounded-full ${isOnline ? 'bg-emerald-500 animate-pulse' : 'bg-red-500'}"></span>
+                                    ${isOnline ? 'ONLINE' : 'OFFLINE'}
+                                </span>
+                                <span class="text-[10px] text-gray-500 mt-1">${timeAgo(w.lastSeen)}</span>
                             </div>
                         </div>
-                    `).join('');
+                    `}).join('');
+                    lucide.createIcons();
+                    document.querySelectorAll('.worker-card').forEach(card => {
+                        card.addEventListener('click', (e) => {
+                            e.stopPropagation();
+                            const ip = card.getAttribute('data-ip');
+                            selectedTarget = ip;
+                            document.getElementById('currentTarget').innerText = ip;
+                            document.querySelectorAll('.worker-card').forEach(c => c.classList.remove('border-emerald-500', 'border-2'));
+                            card.classList.add('border-emerald-500', 'border-2');
+                        });
+                    });
                 }
-
-                // Update Tasks Queue
-                const tList = document.getElementById('tasksList');
-                tList.innerHTML = tasks.length === 0 
-                    ? 'No pending tasks in queue.' 
-                    : tasks.map(t => `<div class="mb-1 border-b border-zinc-900 pb-1 text-zinc-400"><span class="text-emerald-700">#${t.id}</span> ${escapeHTML(t.command)} <span class="text-zinc-700">[Target: ${t.target}]</span></div>`).join('');
-
-                // Update Telemetry (Right Pane)
-                const rList = document.getElementById('resultsList');
-                if (results.length > 0) {
-                    rList.innerHTML = results.slice(-20).reverse().map(r => `
-                        <div class="terminal-line border-l border-zinc-800 pl-3 py-1">
-                            <div class="text-[9px] text-zinc-600 mb-1 flex justify-between">
-                                <span>FROM: ${escapeHTML(r.worker || r.ip)}</span>
-                                <span>TASK: ${r.id}</span>
-                            </div>
-                            <div class="text-zinc-300 break-words whitespace-pre-wrap">${escapeHTML(r.output || r.result)}</div>
-                        </div>
-                    `).join('');
-                }
-
-                lucide.createIcons();
-            } catch (err) { console.error("Update error", err); }
-        }
-
-        const execute = async () => {
-            const cmdInput = document.getElementById('commandInput');
-            const cmd = cmdInput.value.trim();
-            if(!cmd) return;
-
-            const res = await fetch('/api/tasks', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({command: cmd, target: selectedTarget})
-            });
-
-            if(res.ok) {
-                showToast(`Task deployed to ${selectedTarget}`);
-                if (!commandHistory.includes(cmd)) {
-                    commandHistory.unshift(cmd);
-                    if(commandHistory.length > 6) commandHistory.pop();
-                    renderHistory();
-                }
-                cmdInput.value = '';
-                updateData();
+            } catch (err) {
+                console.error("Polling error:", err);
             }
-        };
-
-        const renderHistory = () => {
-            document.getElementById('commandHistory').innerHTML = commandHistory.map(c => `
-                <button onclick="document.getElementById('commandInput').value='${escapeHTML(c)}'" 
-                    class="px-3 py-1.5 rounded-md bg-zinc-800/50 border border-zinc-700 text-[11px] text-zinc-400 hover:text-white hover:border-zinc-500 transition-all font-mono">
-                    ${escapeHTML(c)}
-                </button>
-            `).join('');
-        };
-
-        document.getElementById('sendBtn').onclick = execute;
-        document.getElementById('commandInput').onkeypress = (e) => { if(e.key === 'Enter') execute(); };
+        }
 
         setInterval(updateData, 3000);
         updateData();
+
+        document.getElementById('resetTarget').addEventListener('click', () => {
+            selectedTarget = 'all';
+            document.getElementById('currentTarget').innerText = 'all';
+            document.querySelectorAll('.worker-card').forEach(c => c.classList.remove('border-emerald-500', 'border-2'));
+        });
+
+        const cmdInput = document.getElementById('commandInput');
+        const sendBtn = document.getElementById('sendBtn');
+        const historyDiv = document.getElementById('commandHistory');
+
+        const executeCommand = async () => {
+            const cmd = cmdInput.value.trim();
+            if (!cmd) return;
+            cmdInput.disabled = true;
+            sendBtn.innerHTML = `<i data-lucide="loader-2" class="w-4 h-4 animate-spin"></i> Sending`;
+            lucide.createIcons();
+
+            try {
+                const res = await fetch('/api/tasks', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({command: cmd, target: selectedTarget})
+                });
+
+                if(res.ok) {
+                    showToast(`Payload deployed to ${selectedTarget === 'all' ? 'all workers' : selectedTarget}.`, 'success');
+                    history.unshift(cmd);
+                    if (history.length > 4) history.pop();
+                    historyDiv.innerHTML = history.map(c => `
+                        <div class="bg-gray-900 px-2 py-1.5 rounded border border-gray-800 flex items-center gap-2">
+                            <span class="text-emerald-500 opacity-50">></span> ${escapeHTML(c)}
+                        </div>
+                    `).join('');
+                    cmdInput.value = '';
+                } else {
+                    showToast('Failed to deploy payload.', 'error');
+                }
+            } catch (e) {
+                showToast('Network error.', 'error');
+            }
+
+            cmdInput.disabled = false;
+            sendBtn.innerHTML = `Deploy <i data-lucide="send" class="w-4 h-4"></i>`;
+            lucide.createIcons();
+            cmdInput.focus();
+            updateData();
+        };
+
+        sendBtn.onclick = executeCommand;
+        cmdInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') executeCommand();
+        });
     </script>
 </body>
 </html>
 '''
 
-# ----------------------------------------------------------------------
-# Flask App Backend
-# ----------------------------------------------------------------------
 app = Flask(__name__)
 
 @app.route('/')
 def index():
     return render_template_string(HTML_TEMPLATE)
 
+# ----------------------------------------------------------------------
+# API endpoints
+# ----------------------------------------------------------------------
 @app.route('/api/tasks', methods=['GET'])
 def get_tasks():
-    with db_lock, open(TASKS_FILE, 'r') as f:
-        return jsonify(json.load(f))
+    # Merge all worker task files into one list
+    all_tasks = []
+    for filename in os.listdir(TASKS_DIR):
+        if not filename.startswith('tasks_') or not filename.endswith('.json'):
+            continue
+        with open(os.path.join(TASKS_DIR, filename), 'r') as f:
+            tasks = json.load(f)
+            all_tasks.extend(tasks)
+    # Add a small id for display (just to have a unique ID)
+    for idx, t in enumerate(all_tasks):
+        t['display_id'] = idx + 1
+    return jsonify(all_tasks)
 
 @app.route('/api/tasks', methods=['POST'])
 def add_task():
     data = request.json
     if not data or 'command' not in data:
         return 'Missing command', 400
-    with db_lock, open(TASKS_FILE, 'r+') as f:
-        tasks = json.load(f)
-        tasks.append({'id': len(tasks) + 1, 'command': data['command']})
-        f.seek(0)
-        json.dump(tasks, f, indent=2)
-        f.truncate()
-    return 'OK', 200
+    target = data.get('target', 'all')
+
+    if target == 'all':
+        # Add command to every known worker's queue
+        with open(WORKERS_FILE, 'r') as f:
+            workers = json.load(f)
+        if not workers:
+            return 'No workers registered', 400
+        for worker in workers:
+            ip = worker['ip']
+            ensure_worker_tasks_file(ip)
+            path = worker_tasks_file(ip)
+            with open(path, 'r+') as f:
+                tasks = json.load(f)
+                tasks.append({'id': len(tasks)+1, 'command': data['command'], 'target': 'all'})
+                f.seek(0)
+                json.dump(tasks, f, indent=2)
+                f.truncate()
+        return 'OK', 200
+    else:
+        # Add to specific worker's queue
+        ensure_worker_tasks_file(target)
+        path = worker_tasks_file(target)
+        with open(path, 'r+') as f:
+            tasks = json.load(f)
+            tasks.append({'id': len(tasks)+1, 'command': data['command'], 'target': target})
+            f.seek(0)
+            json.dump(tasks, f, indent=2)
+            f.truncate()
+        return 'OK', 200
 
 @app.route('/api/tasks/pop', methods=['GET'])
 def pop_task():
-    with db_lock, open(TASKS_FILE, 'r+') as f:
+    worker = request.args.get('worker')
+    if not worker:
+        return '', 400
+    ensure_worker_tasks_file(worker)
+    path = worker_tasks_file(worker)
+    with open(path, 'r+') as f:
         tasks = json.load(f)
         if tasks:
             task = tasks.pop(0)
@@ -319,11 +430,11 @@ def pop_task():
             json.dump(tasks, f, indent=2)
             f.truncate()
             return jsonify(task)
-        return '', 204
+    return '', 204
 
 @app.route('/api/results', methods=['POST'])
 def add_result():
-    with db_lock, open(RESULTS_FILE, 'r+') as f:
+    with open(RESULTS_FILE, 'r+') as f:
         results = json.load(f)
         results.append(request.json)
         f.seek(0)
@@ -333,7 +444,7 @@ def add_result():
 
 @app.route('/api/results', methods=['GET'])
 def get_results():
-    with db_lock, open(RESULTS_FILE, 'r') as f:
+    with open(RESULTS_FILE, 'r') as f:
         return jsonify(json.load(f))
 
 @app.route('/api/workers', methods=['POST'])
@@ -341,11 +452,8 @@ def register_worker():
     data = request.json
     if not data:
         return 'Missing data', 400
-        
-    # FIX: Added 'Z' to properly establish this timestamp as UTC on the server side
-    data['lastSeen'] = datetime.utcnow().isoformat() + "Z"
-    
-    with db_lock, open(WORKERS_FILE, 'r+') as f:
+    data['lastSeen'] = datetime.utcnow().isoformat()
+    with open(WORKERS_FILE, 'r+') as f:
         workers = json.load(f)
         existing = next((w for w in workers if w.get('ip') == data.get('ip')), None)
         if existing:
@@ -355,13 +463,15 @@ def register_worker():
         f.seek(0)
         json.dump(workers, f, indent=2)
         f.truncate()
+    # Ensure task file exists for this worker
+    ensure_worker_tasks_file(data['ip'])
     return 'OK', 200
 
 @app.route('/api/workers', methods=['GET'])
 def get_workers():
-    with db_lock, open(WORKERS_FILE, 'r') as f:
+    with open(WORKERS_FILE, 'r') as f:
         return jsonify(json.load(f))
 
 if __name__ == '__main__':
-    print("Dashboard started on http://0.0.0.0:5000")
+    print("Dashboard started on http://127.0.0.1:5000")
     app.run(host='0.0.0.0', port=5000, debug=False)
