@@ -642,10 +642,11 @@ def register_worker():
 def get_workers():
     with open(WORKERS_FILE, 'r') as f:
         workers = json.load(f)
-    
-    now = datetime.utcnow()
+
+    now = datetime.now(timezone.utc)
     cutoff = now - timedelta(minutes=OFFLINE_TIMEOUT_MINUTES)
     active_workers = []
+
     for w in workers:
         last_seen_str = w.get('lastSeen', '')
         if not last_seen_str:
@@ -654,16 +655,16 @@ def get_workers():
             last_seen_str += 'Z'
         try:
             last_seen = datetime.fromisoformat(last_seen_str.replace('Z', '+00:00'))
+            if last_seen >= cutoff:
+                active_workers.append(w)
         except Exception:
             continue
-        if last_seen >= cutoff:
-            active_workers.append(w)
-    
+
     # Prune the file if we removed any workers
     if len(active_workers) != len(workers):
         with open(WORKERS_FILE, 'w') as f:
             json.dump(active_workers, f, indent=2)
-    
+
     return jsonify(active_workers)
 
 if __name__ == '__main__':
