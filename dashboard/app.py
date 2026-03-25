@@ -34,325 +34,353 @@ HTML_TEMPLATE = '''
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>NetBird Fleet Command</title>
-    
-    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🛸</text></svg>">
-    
-    <!-- Tailwind CSS -->
+    <title>NetBird | Fleet Command</title>
     <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500&family=Inter:wght@300;400;600;700&display=swap" rel="stylesheet">
     <script>
-        const origWarn = console.warn;
-        console.warn = function(...args) {
-            if (typeof args[0] === 'string' && args[0].includes('cdn.tailwindcss.com')) return;
-            origWarn.apply(console, args);
-        };
-
         tailwind.config = {
             darkMode: 'class',
             theme: {
                 extend: {
                     colors: {
-                        gray: { 850: '#1f2937', 900: '#111827', 950: '#030712' },
+                        gray: { 850: '#181c25', 900: '#11141b', 950: '#0a0d12' },
                         emerald: { 400: '#34d399', 500: '#10b981', 600: '#059669' }
                     },
-                    fontFamily: {
-                        sans:['Inter', 'system-ui', 'sans-serif'],
-                        mono:['Fira Code', 'ui-monospace', 'monospace']
-                    }
+                    fontFamily: { sans: ['Inter', 'sans-serif'], mono: ['Fira Code', 'monospace'] }
                 }
             }
         }
     </script>
-    <!-- Lucide Icons -->
     <script src="https://unpkg.com/lucide@latest"></script>
     <style>
-        ::-webkit-scrollbar { width: 6px; height: 6px; }
-        ::-webkit-scrollbar-track { background: transparent; }
-        ::-webkit-scrollbar-thumb { background: #374151; border-radius: 4px; }
-        ::-webkit-scrollbar-thumb:hover { background: #4b5563; }
-        .glass-panel { background: rgba(17, 24, 39, 0.7); backdrop-filter: blur(10px); border: 1px solid rgba(55, 65, 81, 0.5); }
+        body { background-color: #0a0d12; scrollbar-gutter: stable; }
+        ::-webkit-scrollbar { width: 5px; height: 5px; }
+        ::-webkit-scrollbar-track { background: #0f1219; }
+        ::-webkit-scrollbar-thumb { background: #374151; border-radius: 10px; }
+        ::-webkit-scrollbar-thumb:hover { background: #10b981; }
+        
+        .terminal-bg { background: radial-gradient(circle at top left, #111827, #030712); }
+        .node-card { transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1); }
+        .node-card.active-target { border-color: #10b981; box-shadow: 0 0 15px rgba(16, 185, 129, 0.15); background: #111827; }
+        .glow-text { text-shadow: 0 0 10px rgba(16, 185, 129, 0.5); }
+        
+        @keyframes pulse-border {
+            0% { border-color: rgba(16, 185, 129, 0.2); }
+            50% { border-color: rgba(16, 185, 129, 0.6); }
+            100% { border-color: rgba(16, 185, 129, 0.2); }
+        }
+        .pulse-emerald { animation: pulse-border 2s infinite; }
     </style>
 </head>
-<body class="bg-gray-950 text-gray-200 font-sans min-h-screen flex flex-col p-4 md:p-8">
+<body class="text-gray-300 font-sans h-screen overflow-hidden flex flex-col">
 
-    <div id="toast-container" class="fixed bottom-5 right-5 z-50 flex flex-col gap-2"></div>
+    <!-- Toast Notifications -->
+    <div id="toast-container" class="fixed top-6 right-6 z-50 flex flex-col gap-3"></div>
 
-    <header class="flex items-center justify-between mb-8 pb-4 border-b border-gray-800">
+    <!-- Top Navigation Bar -->
+    <nav class="h-16 border-b border-gray-800 bg-gray-900/50 backdrop-blur-md flex items-center justify-between px-6 shrink-0">
+        <div class="flex items-center gap-4">
+            <div class="flex items-center gap-2">
+                <div class="bg-emerald-500 p-1.5 rounded-lg shadow-[0_0_15px_rgba(16,185,129,0.4)]">
+                    <i data-lucide="shield-check" class="w-5 h-5 text-gray-950"></i>
+                </div>
+                <span class="font-bold text-xl tracking-tight text-white">NETBIRD <span class="text-emerald-500 font-light">FLEET</span></span>
+            </div>
+            <div class="h-6 w-px bg-gray-800 mx-2"></div>
+            <div class="flex gap-6 text-[11px] font-mono uppercase tracking-widest text-gray-500">
+                <div class="flex items-center gap-2">
+                    <span class="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+                    <span>System: <span class="text-emerald-400">Operational</span></span>
+                </div>
+                <div class="flex items-center gap-2">
+                    <i data-lucide="cpu" class="w-3 h-3"></i>
+                    <span>Nodes: <span id="stat-total" class="text-white">0</span></span>
+                </div>
+            </div>
+        </div>
+        
         <div class="flex items-center gap-3">
-            <div class="p-2 bg-emerald-500/10 rounded-lg border border-emerald-500/20">
-                <i data-lucide="satellite" class="w-6 h-6 text-emerald-400"></i>
-            </div>
-            <div>
-                <h1 class="text-2xl font-bold text-white tracking-tight">Fleet Command</h1>
-                <p class="text-xs text-gray-400 font-mono mt-1">v2.0.4 // SECURE_UPLINK</p>
+            <div id="connection-timer" class="text-[11px] font-mono text-gray-500 border border-gray-800 px-3 py-1 rounded-full bg-black/20">
+                POLLING: 3.0s
             </div>
         </div>
-        <div class="flex gap-4 text-sm font-mono text-gray-400">
-            <div class="flex items-center gap-2"><span class="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span> SYSTEM ONLINE</div>
-        </div>
-    </header>
+    </nav>
 
-    <div class="grid grid-cols-1 lg:grid-cols-12 gap-6 flex-grow">
-        <!-- LEFT COLUMN: Workers & Inputs -->
-        <div class="lg:col-span-5 flex flex-col gap-6">
-            <div class="glass-panel rounded-xl p-5 shadow-xl">
-                <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-4 flex items-center gap-2">
-                    <i data-lucide="terminal-square" class="w-4 h-4"></i> Execute Payload
-                </h2>
-                
-                <div class="flex bg-gray-900 border border-gray-700 rounded-lg overflow-hidden focus-within:border-emerald-500 transition-colors">
-                    <span class="px-3 py-3 text-emerald-500 font-mono border-r border-gray-700 bg-gray-800/50">>_</span>
-                    <input type="text" id="commandInput" placeholder="bash / powershell command..." 
-                        class="w-full bg-transparent text-gray-100 font-mono px-3 py-2 outline-none placeholder-gray-600" autocomplete="off" autofocus>
-                    <button id="sendBtn" class="bg-emerald-600 hover:bg-emerald-500 text-white px-4 font-semibold transition-colors flex items-center gap-2">
-                        Deploy <i data-lucide="send" class="w-4 h-4"></i>
+    <main class="flex flex-1 overflow-hidden">
+        <!-- Sidebar: Node Management -->
+        <aside class="w-80 border-r border-gray-800 bg-gray-900/30 flex flex-col">
+            <div class="p-4 border-b border-gray-800">
+                <div class="relative group">
+                    <i data-lucide="search" class="w-4 h-4 absolute left-3 top-3 text-gray-600 group-focus-within:text-emerald-500 transition-colors"></i>
+                    <input type="text" id="nodeSearch" placeholder="Filter nodes..." 
+                        class="w-full bg-gray-950 border border-gray-800 rounded-lg pl-10 pr-4 py-2 text-sm focus:outline-none focus:border-emerald-500 transition-all">
+                </div>
+            </div>
+            
+            <div class="flex-1 overflow-y-auto p-4 space-y-3" id="workersList">
+                <!-- Nodes populated by JS -->
+                <div class="flex items-center justify-center h-20 text-gray-600 text-sm italic">
+                    Initializing node discovery...
+                </div>
+            </div>
+
+            <div class="p-4 bg-gray-900/50 border-t border-gray-800">
+                <div class="flex items-center justify-between mb-2">
+                    <span class="text-[10px] uppercase font-bold text-gray-500 tracking-wider">Active Target</span>
+                    <button id="resetTarget" class="text-[10px] text-emerald-500 hover:text-emerald-400 font-mono">RESET</button>
+                </div>
+                <div class="bg-gray-950 border border-emerald-500/30 rounded-md p-2 flex items-center gap-2">
+                    <i data-lucide="target" class="w-4 h-4 text-emerald-500"></i>
+                    <span id="currentTarget" class="font-mono text-sm text-emerald-400">all_broadcast</span>
+                </div>
+            </div>
+        </aside>
+
+        <!-- Main Content: Terminal & Execution -->
+        <section class="flex-1 flex flex-col min-w-0 bg-gray-950">
+            <!-- Command Input Area -->
+            <div class="p-6 pb-0">
+                <div class="relative flex items-center">
+                    <div class="absolute left-4 text-emerald-500 font-mono font-bold select-none">#</div>
+                    <input type="text" id="commandInput" placeholder="Enter shell command or payload..." 
+                        class="w-full bg-gray-900 border border-gray-800 rounded-xl pl-10 pr-32 py-4 text-gray-100 font-mono shadow-2xl focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 transition-all">
+                    <button id="sendBtn" class="absolute right-2 bg-emerald-600 hover:bg-emerald-500 text-white px-6 py-2 rounded-lg font-bold transition-all flex items-center gap-2 group">
+                        <span>EXECUTE</span>
+                        <i data-lucide="zap" class="w-4 h-4 group-hover:scale-125 transition-transform"></i>
                     </button>
                 </div>
-
-                <div class="mt-4">
-                    <h3 class="text-xs text-gray-500 font-mono mb-2">RECENT COMMANDS</h3>
-                    <div id="commandHistory" class="flex flex-col gap-1.5 font-mono text-xs">
-                        <div class="text-gray-600 italic">No commands sent in this session.</div>
-                    </div>
-                </div>
-            </div>
-
-            <div class="glass-panel rounded-xl p-5 shadow-xl flex-grow">
-                <div class="flex justify-between items-center mb-4">
-                    <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wider flex items-center gap-2">
-                        <i data-lucide="network" class="w-4 h-4"></i> Active Nodes
-                    </h2>
-                    <span id="workerCount" class="bg-gray-800 text-xs px-2 py-1 rounded-md border border-gray-700">0</span>
-                </div>
                 
-                <div id="workersList" class="flex flex-col gap-3 max-h-[400px] overflow-y-auto pr-2">
-                    <div class="text-gray-500 italic text-sm">Loading nodes...</div>
-                </div>
-            </div>
-        </div>
-
-        <!-- RIGHT COLUMN: Queues and Logs -->
-        <div class="lg:col-span-7 flex flex-col gap-6">
-            <div class="glass-panel rounded-xl p-5 shadow-xl">
-                <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-4 flex items-center gap-2">
-                    <i data-lucide="list-todo" class="w-4 h-4"></i> Pending Queue
-                </h2>
-                <div id="tasksList" class="space-y-2 font-mono text-sm max-h-[150px] overflow-y-auto">
-                    <div class="text-gray-500 italic">Queue is currently empty.</div>
+                <!-- Command Chips -->
+                <div id="commandHistory" class="flex gap-2 mt-3 overflow-x-auto pb-2">
+                    <!-- History Chips populated by JS -->
                 </div>
             </div>
 
-            <div class="glass-panel rounded-xl p-0 shadow-xl flex flex-col flex-grow border border-gray-700 overflow-hidden">
-                <div class="bg-gray-800/80 border-b border-gray-700 px-4 py-2 flex justify-between items-center">
-                    <h2 class="text-sm font-semibold text-gray-300 flex items-center gap-2">
-                        <i data-lucide="activity" class="w-4 h-4"></i> Live Telemetry
-                    </h2>
-                    <div class="flex gap-2">
-                        <div class="w-3 h-3 rounded-full bg-gray-600"></div>
-                        <div class="w-3 h-3 rounded-full bg-gray-600"></div>
-                        <div class="w-3 h-3 rounded-full bg-gray-600"></div>
+            <!-- Terminal Window -->
+            <div class="flex-1 flex flex-col p-6 pt-4 min-h-0">
+                <div class="flex-1 terminal-bg border border-gray-800 rounded-xl overflow-hidden flex flex-col shadow-inner">
+                    <!-- Terminal Header -->
+                    <div class="bg-gray-900/80 px-4 py-2 border-b border-gray-800 flex justify-between items-center">
+                        <div class="flex items-center gap-2">
+                            <div class="flex gap-1.5">
+                                <div class="w-2.5 h-2.5 rounded-full bg-red-500/20 border border-red-500/40"></div>
+                                <div class="w-2.5 h-2.5 rounded-full bg-yellow-500/20 border border-yellow-500/40"></div>
+                                <div class="w-2.5 h-2.5 rounded-full bg-emerald-500/20 border border-emerald-500/40"></div>
+                            </div>
+                            <span class="ml-2 text-[11px] font-mono text-gray-500 uppercase tracking-widest">Live Output Telemetry</span>
+                        </div>
+                        <div class="flex items-center gap-4">
+                            <button onclick="document.getElementById('resultsList').innerHTML=''" class="text-gray-500 hover:text-white transition-colors">
+                                <i data-lucide="trash-2" class="w-4 h-4"></i>
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Output Area -->
+                    <div id="resultsList" class="flex-1 overflow-y-auto p-6 font-mono text-sm space-y-4 scroll-smooth">
+                        <div class="text-gray-600 italic">No output received. Awaiting payload execution...</div>
                     </div>
                 </div>
-                <div id="resultsList" class="p-4 bg-[#0a0f18] text-gray-300 font-mono text-sm overflow-y-auto flex-grow max-h-[500px] space-y-4">
-                    <div class="text-gray-600">Awaiting telemetry data...</div>
+
+                <!-- Pending Queue -->
+                <div class="mt-4 bg-gray-900/30 border border-gray-800 rounded-lg p-3">
+                    <div class="flex items-center gap-2 mb-2">
+                        <i data-lucide="layers" class="w-3 h-3 text-gray-500"></i>
+                        <span class="text-[10px] uppercase font-bold text-gray-500 tracking-wider">Pending Task Queue</span>
+                    </div>
+                    <div id="tasksList" class="flex gap-3 overflow-x-auto pb-1">
+                        <span class="text-xs text-gray-700 italic">Queue clear.</span>
+                    </div>
                 </div>
             </div>
-        </div>
-    </div>
+        </section>
+    </main>
 
     <script>
         lucide.createIcons();
-        let history =[];
+        let selectedTarget = 'all';
+        let history = [];
+        let workerSearchTerm = '';
 
-        function escapeHTML(str) {
+        const escapeHTML = (str) => {
             if (!str) return '';
-            return String(str)
-                .replace(/&/g, "&amp;")
-                .replace(/</g, "&lt;")
-                .replace(/>/g, "&gt;")
-                .replace(/"/g, "&quot;")
-                .replace(/'/g, "&#039;");
-        }
+            return str.toString().replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;");
+        };
 
         const timeAgo = (dateStr) => {
-            if (!dateStr) return "Unknown";
-            
-            // FIX: Force JavaScript to treat the string as UTC if it lacks a 'Z'
-            if (!dateStr.endsWith('Z')) dateStr += 'Z'; 
-
             const now = new Date();
-            // Get current UTC timestamp in milliseconds
-            const utcNow = Date.UTC(
-                now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(),
-                now.getUTCHours(), now.getUTCMinutes(), now.getUTCSeconds()
-            );
             const then = new Date(dateStr).getTime();
-            const seconds = Math.floor((utcNow - then) / 1000);
-            
-            if (seconds < 60) return "Just now";
+            const seconds = Math.floor((now.getTime() - then) / 1000);
+            if (seconds < 60) return "just now";
             if (seconds < 3600) return Math.floor(seconds / 60) + "m ago";
             return Math.floor(seconds / 3600) + "h ago";
         };
 
-        function showToast(message, type = 'success') {
+        const showToast = (message, type = 'success') => {
             const container = document.getElementById('toast-container');
             const toast = document.createElement('div');
-            const bg = type === 'success' ? 'bg-emerald-500/20 border-emerald-500/50 text-emerald-400' : 'bg-red-500/20 border-red-500/50 text-red-400';
-            toast.className = `px-4 py-3 rounded-lg border ${bg} backdrop-blur-md shadow-lg font-mono text-sm flex items-center gap-2 transition-all duration-300 translate-y-10 opacity-0`;
-            toast.innerHTML = `<i data-lucide="${type === 'success' ? 'check-circle' : 'alert-circle'}" class="w-4 h-4"></i> ${message}`;
+            const colorClass = type === 'success' ? 'border-emerald-500 text-emerald-400' : 'border-red-500 text-red-400';
+            toast.className = `px-4 py-3 bg-gray-900 border-l-4 shadow-2xl rounded-r-lg font-mono text-xs flex items-center gap-3 animate-slide-in transition-all duration-300 translate-x-full`;
+            toast.innerHTML = `<i data-lucide="${type === 'success' ? 'check-circle' : 'alert-triangle'}" class="w-4 h-4"></i> ${message}`;
             container.appendChild(toast);
             lucide.createIcons();
-            
-            setTimeout(() => toast.classList.remove('translate-y-10', 'opacity-0'), 10);
+            setTimeout(() => { toast.classList.remove('translate-x-full'); }, 10);
             setTimeout(() => {
-                toast.classList.add('opacity-0');
+                toast.classList.add('opacity-0', 'translate-x-full');
                 setTimeout(() => toast.remove(), 300);
-            }, 3000);
-        }
-
-        async function fetchSafeJSON(url) {
-            try {
-                const res = await fetch(url);
-                const text = await res.text();
-                return text ? JSON.parse(text) :[];
-            } catch (err) {
-                console.error(`Error parsing data from ${url}:`, err);
-                return[];
-            }
-        }
+            }, 4000);
+        };
 
         async function updateData() {
-            const tasks = await fetchSafeJSON('/api/tasks');
-            const results = await fetchSafeJSON('/api/results');
-            const workers = await fetchSafeJSON('/api/workers');
+            try {
+                const [tasksRes, resultsRes, workersRes] = await Promise.all([
+                    fetch('/api/tasks'), fetch('/api/results'), fetch('/api/workers')
+                ]);
+                const tasks = await tasksRes.json();
+                const results = await resultsRes.json();
+                const workers = await workersRes.json();
 
-            const tasksContainer = document.getElementById('tasksList');
-            if (tasks.length === 0) {
-                tasksContainer.innerHTML = '<div class="text-gray-600 italic">Queue is empty.</div>';
-            } else {
-                tasksContainer.innerHTML = tasks.map(t => `
-                    <div class="flex items-center gap-3 bg-gray-800/50 p-2 rounded border border-gray-700/50">
-                        <span class="text-emerald-500 font-bold min-w-[30px]">#${t.id}</span>
-                        <span class="text-gray-300 truncate">${escapeHTML(t.command)}</span>
-                    </div>
-                `).reverse().join('');
-            }
+                // Stats
+                document.getElementById('stat-total').innerText = workers.length;
 
-            const resultsContainer = document.getElementById('resultsList');
-            const wasScrolledToBottom = resultsContainer.scrollHeight - resultsContainer.clientHeight <= resultsContainer.scrollTop + 10;
-            
-            if (results.length === 0) {
-                resultsContainer.innerHTML = '<div class="text-gray-600">Awaiting telemetry data...</div>';
-            } else {
-                resultsContainer.innerHTML = results.map(r => {
-                    const output = r.output || r.result || JSON.stringify(r);
-                    return `
-                    <div class="border-l-2 border-emerald-500/30 pl-3 mb-4">
-                        <div class="flex justify-between items-center mb-1 text-xs">
-                            <span class="text-emerald-400 font-bold">Node: ${escapeHTML(r.worker || r.ip || r.hostname || 'Unknown')}</span>
-                            <span class="text-gray-500">Task #${escapeHTML(r.id || '?')}</span>
+                // Tasks
+                const tasksContainer = document.getElementById('tasksList');
+                if (tasks.length === 0) {
+                    tasksContainer.innerHTML = '<span class="text-xs text-gray-700 italic">Queue clear.</span>';
+                } else {
+                    tasksContainer.innerHTML = tasks.map(t => `
+                        <div class="bg-gray-800 border border-gray-700 px-3 py-1 rounded-full flex items-center gap-2 shrink-0">
+                            <span class="text-[10px] text-emerald-500 font-bold">#${t.id}</span>
+                            <span class="text-xs text-gray-300 font-mono">${escapeHTML(t.command.substring(0,20))}${t.command.length > 20 ? '...' : ''}</span>
                         </div>
-                        <div class="text-gray-300 whitespace-pre-wrap break-all">${escapeHTML(output)}</div>
-                    </div>
-                `}).reverse().join('');
-            }
-            
-            if (wasScrolledToBottom) {
-                resultsContainer.scrollTop = resultsContainer.scrollHeight;
-            }
+                    `).join('');
+                }
 
-            const workersContainer = document.getElementById('workersList');
-            document.getElementById('workerCount').innerText = workers.length;
-            
-            if (workers.length === 0) {
-                workersContainer.innerHTML = '<div class="text-gray-500 italic text-sm">No nodes connected.</div>';
-            } else {
-                const now = new Date();
-                const utcNow = Date.UTC(
-                    now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(),
-                    now.getUTCHours(), now.getUTCMinutes(), now.getUTCSeconds()
+                // Results (Terminal)
+                const resultsContainer = document.getElementById('resultsList');
+                const wasScrolled = resultsContainer.scrollHeight - resultsContainer.clientHeight <= resultsContainer.scrollTop + 50;
+                
+                if (results.length > 0) {
+                    resultsContainer.innerHTML = results.map(r => {
+                        const output = r.output || r.result || JSON.stringify(r);
+                        return `
+                        <div class="group border-b border-gray-800/50 pb-4 last:border-0">
+                            <div class="flex items-center gap-3 mb-2">
+                                <span class="bg-emerald-500/10 text-emerald-500 px-2 py-0.5 rounded text-[10px] font-bold border border-emerald-500/20">NODE: ${escapeHTML(r.worker || r.ip || 'unknown')}</span>
+                                <span class="text-gray-600 text-[10px] font-mono">Task ID: ${r.id || 'N/A'}</span>
+                            </div>
+                            <pre class="text-gray-400 overflow-x-auto whitespace-pre-wrap leading-relaxed">${escapeHTML(output)}</pre>
+                        </div>
+                    `}).reverse().join('');
+                }
+
+                if (wasScrolled) resultsContainer.scrollTop = resultsContainer.scrollHeight;
+
+                // Workers
+                const workersContainer = document.getElementById('workersList');
+                const filteredWorkers = workers.filter(w => 
+                    (w.hostname || w.ip || '').toLowerCase().includes(workerSearchTerm.toLowerCase())
                 );
 
-                workersContainer.innerHTML = workers.map(w => {
-                    // FIX: Force UTC parsing for the online check too
-                    let safeDateStr = w.lastSeen;
-                    if (safeDateStr && !safeDateStr.endsWith('Z')) safeDateStr += 'Z';
+                if (filteredWorkers.length === 0) {
+                    workersContainer.innerHTML = `<div class="text-center py-10 text-gray-600 text-xs">No nodes matching "${workerSearchTerm}"</div>`;
+                } else {
+                    workersContainer.innerHTML = filteredWorkers.map(w => {
+                        const isOnline = ((new Date().getTime() - new Date(w.lastSeen).getTime()) / 60000) < 5;
+                        const isSelected = selectedTarget === w.ip;
+                        return `
+                        <div onclick="selectWorker('${w.ip}')" class="node-card p-3 rounded-xl border border-gray-800 cursor-pointer hover:border-gray-600 ${isSelected ? 'active-target border-emerald-500' : 'bg-gray-900/20'}">
+                            <div class="flex justify-between items-start">
+                                <div class="flex items-center gap-2">
+                                    <i data-lucide="server" class="w-4 h-4 ${isOnline ? 'text-emerald-500' : 'text-gray-600'}"></i>
+                                    <span class="text-sm font-semibold text-gray-200">${escapeHTML(w.hostname || 'Unknown Node')}</span>
+                                </div>
+                                <span class="w-2 h-2 rounded-full ${isOnline ? 'bg-emerald-500 shadow-[0_0_8px_#10b981]' : 'bg-red-500'}"></span>
+                            </div>
+                            <div class="mt-2 flex justify-between items-end">
+                                <div class="text-[10px] font-mono text-gray-500">
+                                    <div>IP: ${escapeHTML(w.ip)}</div>
+                                    <div class="uppercase">${escapeHTML(w.os || 'Linux')}</div>
+                                </div>
+                                <div class="text-[9px] text-gray-600 font-mono">${timeAgo(w.lastSeen)}</div>
+                            </div>
+                        </div>
+                    `}).join('');
+                    lucide.createIcons();
+                }
 
-                    const lastSeenMs = safeDateStr ? new Date(safeDateStr).getTime() : 0;
-                    const isOnline = ((utcNow - lastSeenMs) / 60000) < 5;
-                    
-                    return `
-                    <div class="bg-gray-800/40 border border-gray-700 p-3 rounded-lg flex items-center justify-between hover:bg-gray-800 transition-colors">
-                        <div class="flex flex-col">
-                            <span class="font-bold text-gray-200 text-sm flex items-center gap-2">
-                                <i data-lucide="server" class="w-3 h-3 text-gray-400"></i> 
-                                ${escapeHTML(w.hostname || w.name || w.ip || 'Unknown Node')}
-                            </span>
-                            <span class="text-xs text-gray-500 mt-1">${escapeHTML(w.ip)} • ${escapeHTML(w.os || 'N/A')}</span>
-                        </div>
-                        <div class="flex flex-col items-end">
-                            <span class="flex items-center gap-1.5 text-xs ${isOnline ? 'text-emerald-400' : 'text-red-400'}">
-                                <span class="w-2 h-2 rounded-full ${isOnline ? 'bg-emerald-500 animate-pulse' : 'bg-red-500'}"></span>
-                                ${isOnline ? 'ONLINE' : 'OFFLINE'}
-                            </span>
-                            <span class="text-[10px] text-gray-500 mt-1">${timeAgo(w.lastSeen)}</span>
-                        </div>
-                    </div>
-                `}).join('');
-                lucide.createIcons();
-            }
+            } catch (err) { console.error("Poll Error:", err); }
         }
 
-        setInterval(updateData, 3000);
-        updateData();
+        window.selectWorker = (ip) => {
+            selectedTarget = ip;
+            document.getElementById('currentTarget').innerText = ip;
+            updateData();
+        };
+
+        document.getElementById('nodeSearch').addEventListener('input', (e) => {
+            workerSearchTerm = e.target.value;
+            updateData();
+        });
+
+        document.getElementById('resetTarget').onclick = () => {
+            selectedTarget = 'all';
+            document.getElementById('currentTarget').innerText = 'all_broadcast';
+            updateData();
+        };
 
         const cmdInput = document.getElementById('commandInput');
         const sendBtn = document.getElementById('sendBtn');
-        const historyDiv = document.getElementById('commandHistory');
 
-        async function executeCommand() {
+        const executeCommand = async () => {
             const cmd = cmdInput.value.trim();
             if (!cmd) return;
             
-            cmdInput.disabled = true;
-            sendBtn.innerHTML = `<i data-lucide="loader-2" class="w-4 h-4 animate-spin"></i> Sending`;
+            sendBtn.disabled = true;
+            sendBtn.innerHTML = `<i data-lucide="loader-2" class="w-4 h-4 animate-spin"></i>`;
             lucide.createIcons();
 
             try {
                 const res = await fetch('/api/tasks', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({command: cmd})
+                    body: JSON.stringify({command: cmd, target: selectedTarget})
                 });
 
                 if(res.ok) {
-                    showToast('Payload deployed to queue.', 'success');
-                    history.unshift(cmd);
-                    if (history.length > 4) history.pop();
-                    historyDiv.innerHTML = history.map(c => `
-                        <div class="bg-gray-900 px-2 py-1.5 rounded border border-gray-800 flex items-center gap-2">
-                            <span class="text-emerald-500 opacity-50">></span> ${escapeHTML(c)}
-                        </div>
-                    `).join('');
+                    showToast(`Payload deployed to ${selectedTarget}`, 'success');
+                    if (!history.includes(cmd)) {
+                        history.unshift(cmd);
+                        if (history.length > 5) history.pop();
+                        renderHistory();
+                    }
                     cmdInput.value = '';
                 } else {
-                    showToast('Failed to deploy payload.', 'error');
+                    showToast('Execution failed', 'error');
                 }
-            } catch (e) {
-                showToast('Network error.', 'error');
-            }
+            } catch (e) { showToast('Network unreachable', 'error'); }
 
-            cmdInput.disabled = false;
-            sendBtn.innerHTML = `Deploy <i data-lucide="send" class="w-4 h-4"></i>`;
+            sendBtn.disabled = false;
+            sendBtn.innerHTML = `<span>EXECUTE</span><i data-lucide="zap" class="w-4 h-4"></i>`;
             lucide.createIcons();
-            cmdInput.focus();
             updateData();
-        }
+        };
+
+        const renderHistory = () => {
+            const container = document.getElementById('commandHistory');
+            container.innerHTML = history.map(c => `
+                <button onclick="document.getElementById('commandInput').value='${escapeHTML(c)}'" 
+                    class="bg-gray-900 border border-gray-800 hover:border-emerald-500/50 px-3 py-1 rounded text-[10px] font-mono text-gray-500 whitespace-nowrap transition-colors">
+                    ${escapeHTML(c)}
+                </button>
+            `).join('');
+        };
 
         sendBtn.onclick = executeCommand;
-        cmdInput.addEventListener('keypress', (e) => {
-            if (e.key === 'Enter') executeCommand();
-        });
+        cmdInput.onkeypress = (e) => { if (e.key === 'Enter') executeCommand(); };
+
+        setInterval(updateData, 3000);
+        updateData();
     </script>
 </body>
 </html>
