@@ -21,15 +21,20 @@ for f in [RESULTS_FILE, WORKERS_FILE]:
         with open(f, 'w') as fp:
             json.dump([], fp)
 
-# Helper: get path to a worker’s task file
+# Helper: normalize IP (remove /16 suffix if present)
+def normalize_ip(ip_str):
+    # Split on '/', take first part
+    return ip_str.split('/')[0]
+
+# Helper: get path to a worker’s task file using normalized IP
 def worker_tasks_file(worker_ip):
-    # sanitize IP (replace dots with underscores)
-    safe_ip = worker_ip.replace('.', '_')
+    safe_ip = normalize_ip(worker_ip).replace('.', '_')
     return os.path.join(TASKS_DIR, f'tasks_{safe_ip}.json')
 
 def ensure_worker_tasks_file(worker_ip):
     path = worker_tasks_file(worker_ip)
     if not os.path.exists(path):
+        # Ensure parent directory exists (it does)
         with open(path, 'w') as f:
             json.dump([], f)
     return path
@@ -86,7 +91,7 @@ HTML_TEMPLATE = '''
             </div>
             <div>
                 <h1 class="text-2xl font-bold text-white tracking-tight">Fleet Command</h1>
-                <p class="text-xs text-gray-400 font-mono mt-1">v2.1 // Per‑worker queues</p>
+                <p class="text-xs text-gray-400 font-mono mt-1">v2.2 // Fixed CIDR</p>
             </div>
         </div>
         <div class="flex gap-4 text-sm font-mono text-gray-400">
@@ -394,8 +399,9 @@ def add_task():
             return 'No workers registered', 400
         for worker in workers:
             ip = worker['ip']
-            ensure_worker_tasks_file(ip)
-            path = worker_tasks_file(ip)
+            ip_clean = normalize_ip(ip)
+            ensure_worker_tasks_file(ip_clean)
+            path = worker_tasks_file(ip_clean)
             with open(path, 'r+') as f:
                 tasks = json.load(f)
                 tasks.append({'id': len(tasks)+1, 'command': data['command'], 'target': 'all'})
@@ -404,9 +410,10 @@ def add_task():
                 f.truncate()
         return 'OK', 200
     else:
-        # Add to specific worker's queue
-        ensure_worker_tasks_file(target)
-        path = worker_tasks_file(target)
+        # Add to specific worker's queue – target may be raw IP or with CIDR
+        target_clean = normalize_ip(target)
+        ensure_worker_tasks_file(target_clean)
+        path = worker_tasks_file(target_clean)
         with open(path, 'r+') as f:
             tasks = json.load(f)
             tasks.append({'id': len(tasks)+1, 'command': data['command'], 'target': target})
@@ -420,8 +427,9 @@ def pop_task():
     worker = request.args.get('worker')
     if not worker:
         return '', 400
-    ensure_worker_tasks_file(worker)
-    path = worker_tasks_file(worker)
+    worker_clean = normalize_ip(worker)
+    ensure_worker_tasks_file(worker_clean)
+    path = worker_tasks_file(worker_clean)
     with open(path, 'r+') as f:
         tasks = json.load(f)
         if tasks:
@@ -452,6 +460,9 @@ def register_worker():
     data = request.json
     if not data:
         return 'Missing data', 400
+    # Normalize the IP before storing
+    if 'ip' in data:
+        data['ip'] = normalize_ip(data['ip'])
     data['lastSeen'] = datetime.utcnow().isoformat()
     with open(WORKERS_FILE, 'r+') as f:
         workers = json.load(f)
